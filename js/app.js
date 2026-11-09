@@ -25,6 +25,8 @@ const S = {
   buildEditId: null,
   keyOk: false,
   selfPhoto: null,
+  selecting: false,
+  sel: new Set(),
 };
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -80,9 +82,9 @@ function plural(n, one, few, many) {
 
 const loadingHTML = (text) => `<div class="loading"><span class="serif">${text}</span><div class="loader"></div></div>`;
 
-function tileHTML(it, extra = '', act = 'item') {
+function tileHTML(it, extra = '', act = 'item', selected = false) {
   const c = catById(it.category);
-  return `<button class="tile" data-act="${act}" data-id="${it.id}"><div class="ph-wrap"><img src="${blobURL(it.image)}" alt="" loading="lazy"></div>
+  return `<button class="tile ${selected ? 'sel' : ''}" data-act="${act}" data-id="${it.id}"><div class="ph-wrap"><img src="${blobURL(it.image)}" alt="" loading="lazy"></div>
     <div class="cap">${esc(it.name || (c ? c.label : ''))}</div>${extra}</button>`;
 }
 
@@ -237,7 +239,10 @@ function viewSpinta() {
   const cats = S.categories.filter((c) => c.group === S.fGroup);
 
   let html = `<div class="stack">
-    <div class="hello"><div class="h-title">Mano<br><em>spinta</em></div><div class="label h-sub">${S.items.length} ${plural(S.items.length, 'rūbas', 'rūbai', 'rūbų')}</div></div>
+    <div class="hello row" style="justify-content:space-between;align-items:flex-end">
+      <div><div class="h-title">Mano<br><em>spinta</em></div><div class="label h-sub">${S.items.length} ${plural(S.items.length, 'rūbas', 'rūbai', 'rūbų')}</div></div>
+      ${S.items.length ? `<button class="btn sm ${S.selecting ? 'dark' : ''}" data-act="select-mode">${S.selecting ? 'Baigti' : 'Žymėti'}</button>` : ''}
+    </div>
     <nav class="filters">
       ${groups.map((g) => `<button class="filt ${S.fGroup === g.id ? 'on' : ''}" data-act="fgroup" data-v="${g.id}">${g.label}<sup>${groupCount(g)}</sup></button>`).join('')}
     </nav>
@@ -257,8 +262,17 @@ function viewSpinta() {
       html += `<div class="tile" data-q="${q.id}"><div class="ph-wrap"><img class="ph" src="${q.preview}" alt=""></div><div class="cap">Įkeliama</div>
         <div class="proc"><span class="lbl">${esc(q.label)}</span><div class="bar"><i style="width:${Math.round(q.p * 100)}%"></i></div></div></div>`;
     }
-    for (const it of items) html += tileHTML(it);
+    for (const it of items) html += S.selecting ? tileHTML(it, '', 'sel-item', S.sel.has(it.id)) : tileHTML(it);
     html += `</div>`;
+  }
+  if (S.selecting) {
+    const n = S.sel.size;
+    return html + `</div><div class="bulkbar">
+      <span class="label bb-count">${n ? `Pažymėta: ${n}` : 'Paliesk rūbus'}</span>
+      <button class="btn sm" data-act="sel-all">${items.length && items.every((i) => S.sel.has(i.id)) ? 'Nužymėti' : 'Visus'}</button>
+      <button class="btn sm" data-act="sel-move" ${n ? '' : 'disabled'}>Kategorija</button>
+      <button class="btn sm danger" data-act="sel-del" ${n ? '' : 'disabled'}>Ištrinti</button>
+    </div>`;
   }
   return html + `</div><button class="fab" data-act="add" aria-label="Pridėti rūbą">+</button>`;
 }
@@ -437,6 +451,8 @@ function updateWeatherPill() {
 
 window.addEventListener('hashchange', () => {
   S.tab = location.hash.slice(1) || 'fitas';
+  S.selecting = false;
+  S.sel.clear();
   closeSheet();
   render().then(() => window.scrollTo(0, 0));
 });
@@ -787,8 +803,10 @@ const actions = {
         it.image = await resize(cut, 900, 'image/png');
         it.cutout = true;
       } catch (e) {
-        toast('Nepavyko: ' + e.message);
+        console.warn('bg', e);
+        toast('Fono iškirpti nepavyko. Patikrink internetą ir bandyk dar kartą.', 4000);
         el.disabled = false;
+        el.textContent = 'Iškirpti foną';
         return;
       }
     }
@@ -952,6 +970,55 @@ const actions = {
     fileTarget = 'import';
     fileInput.multiple = false;
     fileInput.click();
+  },
+  'select-mode'() {
+    S.selecting = !S.selecting;
+    S.sel.clear();
+    rerender();
+  },
+  'sel-item'(el) {
+    const id = el.dataset.id;
+    if (S.sel.has(id)) S.sel.delete(id);
+    else S.sel.add(id);
+    rerender();
+  },
+  'sel-all'() {
+    const visible = [...document.querySelectorAll('.grid .tile[data-id]')].map((t) => t.dataset.id);
+    const all = visible.every((id) => S.sel.has(id));
+    visible.forEach((id) => (all ? S.sel.delete(id) : S.sel.add(id)));
+    rerender();
+  },
+  async 'sel-del'() {
+    const n = S.sel.size;
+    if (!n || !confirm(`Ištrinti ${n} ${plural(n, 'rūbą', 'rūbus', 'rūbų')} iš spintos? To atšaukti nebus galima.`)) return;
+    for (const id of S.sel) await db.del('items', id);
+    S.items = S.items.filter((i) => !S.sel.has(i.id));
+    S.sel.clear();
+    S.selecting = false;
+    toast(`Ištrinta: ${n}`);
+    rerender();
+  },
+  'sel-move'() {
+    const n = S.sel.size;
+    openSheet(`${sheetTop('Keisti kategoriją')}
+      <div class="stack">
+        <div class="label">${n} ${plural(n, 'rūbas', 'rūbai', 'rūbų')}</div>
+        <div class="field"><label>Nauja kategorija</label><select class="input" id="moveCat">${categorySelect(S.fCat || '')}</select></div>
+        <button class="btn primary block" data-act="sel-move-save">Perkelti</button>
+      </div>`);
+  },
+  async 'sel-move-save'() {
+    const cat = $('#moveCat').value;
+    for (const id of S.sel) {
+      const it = itemById(id);
+      if (it) { it.category = cat; await db.put('items', it); }
+    }
+    const n = S.sel.size;
+    S.sel.clear();
+    S.selecting = false;
+    closeSheet();
+    toast(`Perkelta: ${n} → ${catById(cat).label}`);
+    rerender();
   },
   async 'del-demo'() {
     if (!confirm('Ištrinti visus bandomuosius rūbus ir su jais sukurtus fitus?')) return;

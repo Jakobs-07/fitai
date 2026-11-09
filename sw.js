@@ -1,5 +1,5 @@
 // Offline režimas: pirmiausia bandom tinklą (kad atnaujinimai atsirastų iškart), jei nėra interneto – imam iš atminties.
-const CACHE = 'fitai-v2';
+const CACHE = 'fitai-v3';
 const SHELL = ['./', 'index.html', 'css/app.css', 'js/app.js', 'js/db.js', 'js/data.js', 'js/ai.js', 'js/images.js', 'js/weather.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {
@@ -13,10 +13,12 @@ self.addEventListener('fetch', (e) => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   const isOwn = url.origin === self.location.origin;
-  const isLib = ['cdn.jsdelivr.net', 'staticimgly.com', 'fonts.googleapis.com', 'fonts.gstatic.com'].includes(url.hostname);
-  if (!isOwn && !isLib) return; // OpenAI, orai – visada tiesiai
+  // Fono iškirpimo biblioteka ir modelis (jsdelivr, staticimgly) – NELIEČIAM: iPhone Safari
+  // nepavyksta jų persiųsti per service worker'į ("Load failed"). Juos saugo naršyklės atmintis.
+  const isLib = ['fonts.googleapis.com', 'fonts.gstatic.com'].includes(url.hostname);
+  if (!isOwn && !isLib) return; // OpenAI, orai, bibliotekos – visada tiesiai
   if (isLib) {
-    // bibliotekos ir fono modelis nekinta – imam iš atminties
+    // šriftai nekinta – imam iš atminties
     e.respondWith(caches.open(CACHE).then(async (c) => {
       const hit = await c.match(req);
       if (hit) return hit;
