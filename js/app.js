@@ -1,7 +1,7 @@
 import { db, getSetting, setSetting, uid, requestPersist, exportAll, importAll } from './db.js';
 import { DEFAULT_CATEGORIES, GROUPS, SLOTS, SEASONS, OCCASIONS, VIBE_IDEAS } from './data.js';
 import { resize, removeBackground, blobURL, transformImage } from './images.js';
-import { tagItem, styleOutfit, renderOutfit, hasKey, testKey, DEFAULT_TEXT_MODEL, DEFAULT_IMAGE_MODEL } from './ai.js';
+import { tagItem, styleOutfit, renderOutfit, chatAboutOutfit, hasKey, testKey, DEFAULT_TEXT_MODEL, DEFAULT_IMAGE_MODEL } from './ai.js';
 import { getWeather, weatherForAI, findCity } from './weather.js';
 
 // ================= Būsena =================
@@ -26,6 +26,7 @@ const S = {
   keyOk: false,
   selfPhoto: null,
   selecting: false,
+  chatting: null,
   sel: new Set(),
 };
 
@@ -180,9 +181,70 @@ function outfitCardHTML(o) {
         ${o.source === 'ai' ? `<button class="btn" data-act="restyle" data-id="${o.id}" ${S.styling ? 'disabled' : ''}>Kitas variantas</button>` : ''}
         <button class="btn ${o.source === 'ai' ? '' : 'full'}" data-act="builder" data-id="${o.id}">Keisti rūbus</button>
       </div>
+      ${chatHTML(o)}
     </div>
   </div>`;
 }
+
+const CHAT_IDEAS = ['Kažką šiltesnio', 'Spalvingiau', 'Pakeisk batus', 'Kodėl būtent taip?'];
+
+function chatHTML(o) {
+  const msgs = o.chat || [];
+  const busy = S.chatting === o.id;
+  return `<div class="chat">
+    <div class="section-head"><h3>Pokalbis su stiliste</h3><span class="label">${msgs.length ? '' : 'Pataisyk fitą žodžiais'}</span></div>
+    ${msgs.map((m) => m.role === 'user'
+      ? `<div class="msg me">${esc(m.text)}</div>`
+      : `<div class="msg her">${esc(m.text)}${m.changed ? '<span class="label msg-note">Fitas atnaujintas</span>' : ''}</div>`).join('')}
+    ${busy ? `<div class="msg her typing"><div class="loader"></div></div>` : ''}
+    ${!msgs.length && !busy ? `<div class="chips wrap">${CHAT_IDEAS.map((t) => `<button class="chip" data-act="chat-idea" data-id="${o.id}" data-v="${esc(t)}">${t}</button>`).join('')}</div>` : ''}
+    <form class="chat-form" data-id="${o.id}">
+      <input class="input" id="chatInput" autocomplete="off" placeholder="Pvz. pakeisk batus į baltus…" ${busy ? 'disabled' : ''}>
+      <button class="btn primary sm" type="submit" ${busy ? 'disabled' : ''}>Siųsti</button>
+    </form>
+  </div>`;
+}
+
+async function sendChat(id, text) {
+  text = (text || '').trim();
+  const o = outfitById(id);
+  if (!o || !text || S.chatting) return;
+  if (!S.keyOk) return toast('Pokalbiui reikia DI rakto (skiltis „Daugiau“)');
+  o.chat = [...(o.chat || []), { role: 'user', text, at: Date.now() }];
+  await saveOutfit(o);
+  S.chatting = o.id;
+  await rerender();
+  document.querySelector('.chat-form')?.scrollIntoView({ block: 'end', behavior: 'smooth' });
+  try {
+    const r = await chatAboutOutfit({
+      outfit: o, message: text, items: S.items, categories: S.categories,
+      weather: weatherForAI(S.weather), wearStats: wearStats(),
+    });
+    const changed = !!r.changed && r.itemIds.join() !== o.itemIds.join();
+    o.chat.push({ role: 'assistant', text: r.reply, changed, at: Date.now() });
+    if (changed) {
+      o.itemIds = r.itemIds;
+      if (r.title) o.title = r.title;
+      if (r.explanation) o.explanation = r.explanation;
+      if (r.tip) o.tip = r.tip;
+      o.renders = {};
+      S.renderTab = 'flat';
+    }
+    await saveOutfit(o);
+  } catch (e) {
+    toast(e.message === 'NO_KEY' ? 'Reikia API rakto' : 'Klaida: ' + e.message, 5000);
+  }
+  S.chatting = null;
+  await rerender();
+  document.querySelector('.chat-form')?.scrollIntoView({ block: 'end' });
+}
+
+document.addEventListener('submit', (e) => {
+  const f = e.target.closest('.chat-form');
+  if (!f) return;
+  e.preventDefault();
+  sendChat(f.dataset.id, f.querySelector('#chatInput').value);
+});
 
 // ================= Ekranai =================
 function viewFitas() {
@@ -997,6 +1059,9 @@ const actions = {
     fileTarget = 'import';
     fileInput.multiple = false;
     fileInput.click();
+  },
+  'chat-idea'(el) {
+    sendChat(el.dataset.id, el.dataset.v);
   },
   'select-mode'() {
     S.selecting = !S.selecting;

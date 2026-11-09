@@ -73,10 +73,18 @@ export async function tagItem(blob, categories) {
   return out;
 }
 
-// ---- Stilistė: parenka outfitą iš spintos ----
-export async function styleOutfit({ vibe, items, categories, weather, wearStats, exclude = [] }) {
+// ---- Stilistė ----
+const STYLIST =
+  'Tu esi asmeninė stilistė: šilta, tiesmuka, su gera skonio nuojauta, kalbi kaip mados žurnalo redaktorė. ' +
+  'Kalbi lietuviškai, natūraliai, be emoji. ' +
+  'Fitus sudarai TIK iš pateiktos spintos rūbų (naudok tikslius id). ' +
+  'Taisyklės: arba suknelė (vieta onepiece), arba viršus + apačia; batai jei yra; viršutinis rūbas jei vėsu; ' +
+  'pėdkelnės/kojinės jei tinka; 0–3 aksesuarai. Atsižvelk į orus, progą, spalvų derinius. ' +
+  'Jei įmanoma, rinkis rečiau vilkėtus rūbus, bet stilius svarbiau. ';
+
+function wardrobeFor(items, categories, wearStats) {
   const catById = Object.fromEntries(categories.map((c) => [c.id, c]));
-  const wardrobe = items.map((it) => {
+  return items.map((it) => {
     const c = catById[it.category];
     const ws = wearStats[it.id];
     return {
@@ -93,16 +101,16 @@ export async function styleOutfit({ vibe, items, categories, weather, wearStats,
       paskutini_karta: ws ? ws.last : null,
     };
   });
+}
+
+export async function styleOutfit({ vibe, items, categories, weather, wearStats, exclude = [] }) {
+  const wardrobe = wardrobeFor(items, categories, wearStats);
   const today = new Date().toISOString().slice(0, 10);
   const out = await chatJSON([
     {
       role: 'system',
       content:
-        'Tu esi šilta, žaisminga ir talentinga asmeninė stilistė. Kalbi lietuviškai, draugiškai, su keliais emoji. ' +
-        'Sudarai outfitą TIK iš pateiktos spintos rūbų (naudok tikslius id). ' +
-        'Taisyklės: arba suknelė (vieta onepiece), arba viršus + apačia; batai jei yra; viršutinis rūbas jei vėsu; ' +
-        'pėdkelnės/kojinės jei tinka; 0–3 aksesuarai. Atsižvelk į orus, progą, spalvų derinius. ' +
-        'Jei įmanoma, rinkis rečiau vilkėtus rūbus, bet stilius svarbiau. ' +
+        STYLIST +
         'Atsakyk TIK JSON: {"title": "trumpas žaismingas pavadinimas", "itemIds": [...], ' +
         '"explanation": "2–3 sakiniai kodėl šis derinys", "tip": "1 stiliaus patarimas (pvz. kaip susegti, kokį makiažą)"}. ' +
         'Jei spintoje trūksta būtinų rūbų, vis tiek pasiūlyk geriausią įmanomą ir paminėk, ko trūksta.',
@@ -181,4 +189,43 @@ export async function renderOutfit({ items, categories, mode, selfPhoto }) {
 export async function testKey(k) {
   const res = await fetch(`${API}/models`, { headers: { Authorization: `Bearer ${k}` } });
   return res.ok;
+}
+
+// ---- Pokalbis su stiliste apie konkretų fitą ----
+export async function chatAboutOutfit({ outfit, message, items, categories, weather, wearStats }) {
+  const history = (outfit.chat || []).slice(-12).map((m) => ({
+    role: m.role === 'user' ? 'user' : 'assistant',
+    content: m.role === 'user' ? m.text : JSON.stringify({ reply: m.text }),
+  }));
+  const out = await chatJSON([
+    {
+      role: 'system',
+      content:
+        STYLIST +
+        'Dabar kalbiesi su klientė apie jau sudarytą fitą. Ji gali klausti, prašyti pakeitimų ar naujos idėjos. ' +
+        'Jei prašo pakeisti – pakeisk tik tai, ko reikia, likusius rūbus palik. Jei tik klausia – atsakyk ir nieko nekeisk. ' +
+        'Atsakymas trumpas: 1–3 sakiniai. ' +
+        'Atsakyk TIK JSON: {"reply": "tavo atsakymas", "changed": true/false, "itemIds": [visi fito rūbų id po pakeitimo], ' +
+        '"title": "pavadinimas (jei pasikeitė fitas)", "explanation": "2–3 sakiniai apie naują derinį (jei pasikeitė)", "tip": "patarimas (jei pasikeitė)"}. ' +
+        'Jei spintoje nėra to, ko ji prašo, pasakyk tai ir pasiūlyk artimiausią variantą.',
+    },
+    {
+      role: 'user',
+      content: JSON.stringify({
+        data: new Date().toISOString().slice(0, 10),
+        orai: weather || 'nežinomi',
+        pradinis_noras: outfit.vibe || '',
+        dabartinis_fitas: { pavadinimas: outfit.title, itemIds: outfit.itemIds },
+        spinta: wardrobeFor(items, categories, wearStats),
+      }),
+    },
+    { role: 'assistant', content: JSON.stringify({ reply: 'Supratau, matau spintą ir dabartinį fitą.' }) },
+    ...history,
+    { role: 'user', content: message },
+  ]);
+  const valid = new Set(items.map((i) => i.id));
+  out.itemIds = (out.itemIds || []).filter((id) => valid.has(id));
+  if (!out.itemIds.length) out.changed = false;
+  if (!out.reply) out.reply = 'Atsiprašau, nesupratau. Pabandyk perrašyti kitaip.';
+  return out;
 }
