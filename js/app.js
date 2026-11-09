@@ -1,7 +1,7 @@
 import { db, getSetting, setSetting, uid, requestPersist, exportAll, importAll } from './db.js';
 import { DEFAULT_CATEGORIES, GROUPS, SLOTS, SEASONS, OCCASIONS, VIBE_IDEAS } from './data.js';
 import { resize, removeBackground, blobURL, transformImage } from './images.js';
-import { tagItem, styleOutfit, renderOutfit, chatAboutOutfit, hasKey, testKey, DEFAULT_TEXT_MODEL, DEFAULT_IMAGE_MODEL } from './ai.js';
+import { tagItem, styleOutfit, renderOutfit, chatAboutOutfit, hasKey, testKey, modelsInUse } from './ai.js';
 import { getWeather, weatherForAI, findCity } from './weather.js';
 
 // ================= Būsena =================
@@ -402,8 +402,7 @@ const setHead = (n, title, sub = '') => `<div class="set-head"><span class="n">$
 async function viewNustatymai() {
   const loc = await getSetting('location');
   const bg = await getSetting('bgRemoval', true);
-  const textModel = (await getSetting('textModel')) || DEFAULT_TEXT_MODEL;
-  const imageModel = (await getSetting('imageModel')) || DEFAULT_IMAGE_MODEL;
+  const { text: textModel, image: imageModel } = await modelsInUse();
   const custom = S.categories.filter((c) => c.custom);
   let usage = '';
   try {
@@ -473,6 +472,7 @@ async function viewNustatymai() {
 
     <details class="card"><summary>Išplėstiniai nustatymai</summary>
       <div class="stack" style="margin-top:12px">
+        <p class="small muted" style="margin:0">Modeliai parenkami automatiškai. Keisk tik jei žinai, ką darai – tuščias laukas grąžina automatinį parinkimą.</p>
         <div class="field"><label>Teksto modelis</label><input class="input" id="textModel" value="${esc(textModel)}"></div>
         <div class="field"><label>Vaizdų modelis</label><input class="input" id="imageModel" value="${esc(imageModel)}"></div>
         <button class="btn" data-act="save-models">Išsaugoti</button>
@@ -1123,8 +1123,13 @@ const actions = {
     rerender();
   },
   async 'save-models'() {
-    await setSetting('textModel', $('#textModel').value.trim() || DEFAULT_TEXT_MODEL);
-    await setSetting('imageModel', $('#imageModel').value.trim() || DEFAULT_IMAGE_MODEL);
+    const cur = await modelsInUse();
+    const t = $('#textModel').value.trim();
+    const i = $('#imageModel').value.trim();
+    if (!t) await setSetting('textModel', null);
+    else if (t !== cur.text) await setSetting('textModel', t);
+    if (!i) await setSetting('imageModel', null);
+    else if (i !== cur.image) await setSetting('imageModel', i);
     toast('Išsaugota');
   },
 };

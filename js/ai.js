@@ -1,11 +1,12 @@
 // OpenAI API: rūbų atpažinimas, outfitų parinkimas, vaizdų generavimas.
-import { getSetting } from './db.js';
+import { getSetting, setSetting } from './db.js';
 import { SEASONS, OCCASIONS } from './data.js';
 import { toDataURLForAI, toPngForAI } from './images.js';
 
 const API = 'https://api.openai.com/v1';
 export const DEFAULT_TEXT_MODEL = 'gpt-5-mini';
-export const DEFAULT_IMAGE_MODEL = 'gpt-image-1';
+export const DEFAULT_IMAGE_MODEL = 'gpt-image-2.6-flare';
+
 
 async function key() {
   const k = await getSetting('apiKey');
@@ -15,23 +16,75 @@ async function key() {
 
 async function fail(res) {
   let msg = `Klaida ${res.status}`;
+  let code = '';
   try {
     const j = await res.json();
     if (j.error && j.error.message) msg = j.error.message;
+    code = (j.error && (j.error.code || j.error.type)) || '';
   } catch (_) {}
   if (res.status === 401) msg = 'Neteisingas API raktas. Patikrink nustatymuose.';
   if (res.status === 429) msg = 'Baigėsi kreditas arba per daug užklausų. Patikrink OpenAI sąskaitą.';
-  throw new Error(msg);
+  const err = new Error(msg);
+  err.modelMissing = res.status === 404 || code === 'model_not_found' || /model .*(does not exist|not found|deprecated|no longer)/i.test(msg);
+  throw err;
+}
+
+// ---- Modelių parinkimas ----
+// OpenAI periodiškai išima senus modelius. Jei nurodytas modelis nebeegzistuoja,
+// paklausiam OpenAI, kokie modeliai prieinami šiam raktui, ir pasirenkam naujausią tinkamą.
+async function listModels() {
+  const res = await fetch(`${API}/models`, { headers: { Authorization: `Bearer ${await key()}` } });
+  if (!res.ok) await fail(res);
+  return (await res.json()).data || [];
+}
+const newest = (arr) => arr.sort((a, b) => (b.created || 0) - (a.created || 0))[0]?.id;
+
+async function discoverModel(kind) {
+  const all = await listModels();
+  let pick;
+  if (kind === 'image') {
+    const imgs = all.filter((m) => /^gpt-image/.test(m.id));
+    pick = newest(imgs.filter((m) => !/mini/.test(m.id))) || newest(imgs);
+  } else {
+    const text = all.filter((m) => /^gpt-\d/.test(m.id) && !/(audio|realtime|image|search|transcribe|tts|codex|instruct|chat-latest)/.test(m.id));
+    pick = newest(text.filter((m) => /-mini$/.test(m.id))) || newest(text.filter((m) => /mini/.test(m.id))) || newest(text);
+  }
+  if (!pick) throw new Error(kind === 'image' ? 'OpenAI neranda tinkamo vaizdų modelio šiam raktui.' : 'OpenAI neranda tinkamo teksto modelio šiam raktui.');
+  await setSetting(kind === 'image' ? 'autoImageModel' : 'autoTextModel', pick);
+  return pick;
+}
+
+async function currentModel(kind) {
+  return kind === 'image'
+    ? (await getSetting('imageModel')) || (await getSetting('autoImageModel')) || DEFAULT_IMAGE_MODEL
+    : (await getSetting('textModel')) || (await getSetting('autoTextModel')) || DEFAULT_TEXT_MODEL;
+}
+
+// Paleidžia užklausą; jei modelis dingęs – susiranda naują ir bando dar kartą.
+async function withModel(kind, run) {
+  try {
+    return await run(await currentModel(kind));
+  } catch (e) {
+    if (!e.modelMissing) throw e;
+    await setSetting(kind === 'image' ? 'imageModel' : 'textModel', null); // rankinis nustatymas nebegalioja
+    return run(await discoverModel(kind));
+  }
+}
+
+export async function modelsInUse() {
+  return { text: await currentModel('text'), image: await currentModel('image') };
 }
 
 async function chatJSON(messages) {
-  const model = (await getSetting('textModel')) || DEFAULT_TEXT_MODEL;
-  const res = await fetch(`${API}/chat/completions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await key()}` },
-    body: JSON.stringify({ model, messages, response_format: { type: 'json_object' } }),
+  const res = await withModel('text', async (model) => {
+    const r = await fetch(`${API}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await key()}` },
+      body: JSON.stringify({ model, messages, response_format: { type: 'json_object' } }),
+    });
+    if (!r.ok) await fail(r);
+    return r;
   });
-  if (!res.ok) await fail(res);
   const j = await res.json();
   const text = j.choices?.[0]?.message?.content || '{}';
   return JSON.parse(text);
@@ -134,10 +187,8 @@ export async function styleOutfit({ vibe, items, categories, weather, wearStats,
 
 // ---- Vaizdas "ant manekeno" arba "ant manęs" ----
 export async function renderOutfit({ items, categories, mode, selfPhoto }) {
-  const model = (await getSetting('imageModel')) || DEFAULT_IMAGE_MODEL;
   const catById = Object.fromEntries(categories.map((c) => [c.id, c]));
   const fd = new FormData();
-  fd.append('model', model);
   let idx = 1;
   let prompt;
   const list = [];
@@ -157,7 +208,7 @@ export async function renderOutfit({ items, categories, mode, selfPhoto }) {
       'Fashion photo. Show the woman from image 1 wearing EXACTLY the clothing items from the other images, ' +
       'combined as one outfit. Keep her face, hair, body shape and skin tone identical to image 1. ' +
       'Reproduce every garment faithfully: same color, pattern, texture, cut and details. ' +
-      'Full body, standing, natural relaxed pose, head to toe visible including shoes, soft pastel studio background, ' +
+      'Full body, standing, natural relaxed pose, head to toe visible including shoes, plain warm beige studio background, ' +
       'soft natural light, high-end editorial look.\n' +
       list.join('\n');
   } else {
@@ -165,19 +216,29 @@ export async function renderOutfit({ items, categories, mode, selfPhoto }) {
       'Fashion e-commerce photo of a neutral, faceless matte white female mannequin (full body, head to toe) ' +
       'wearing EXACTLY the clothing items from the provided images, combined as one outfit. ' +
       'Reproduce every garment faithfully: same color, pattern, texture, cut and details. ' +
-      'Soft pastel studio background, soft even lighting, centered, entire outfit including shoes visible.\n' +
+      'Plain warm beige studio background, soft even lighting, centered, entire outfit including shoes visible.\n' +
       list.join('\n');
   }
   fd.append('prompt', prompt);
-  fd.append('size', '1024x1536');
-  fd.append('quality', 'medium');
   fd.append('n', '1');
-  const res = await fetch(`${API}/images/edits`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${await key()}` },
-    body: fd,
+  const send = async (model, extras) => {
+    const body = new FormData();
+    for (const [k, v] of fd.entries()) body.append(k, v);
+    body.append('model', model);
+    if (extras) { body.append('size', '1024x1536'); body.append('quality', 'medium'); }
+    const r = await fetch(`${API}/images/edits`, { method: 'POST', headers: { Authorization: `Bearer ${await key()}` }, body });
+    if (!r.ok) await fail(r);
+    return r;
+  };
+  const res = await withModel('image', async (model) => {
+    try {
+      return await send(model, true);
+    } catch (e) {
+      // naujesni modeliai gali nepriimti dydžio/kokybės parametrų – bandome be jų
+      if (!e.modelMissing && /size|quality|parameter/i.test(e.message)) return send(model, false);
+      throw e;
+    }
   });
-  if (!res.ok) await fail(res);
   const j = await res.json();
   const b64 = j.data?.[0]?.b64_json;
   if (b64) return (await fetch(`data:image/png;base64,${b64}`)).blob();
