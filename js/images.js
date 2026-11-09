@@ -65,25 +65,27 @@ export async function trimTransparent(blob, pad = 12) {
 }
 
 let bgModule;
+let bgWorkingModel = null;
 export async function removeBackground(blob, onProgress) {
   if (!bgModule) bgModule = await import(BG_LIB);
   const fn = bgModule.removeBackground || bgModule.default;
-  const config = {
-    model: 'isnet_quint8',
-    output: { format: 'image/png' },
-    progress: (key, current, total) => {
-      if (onProgress && total) onProgress(key.startsWith('fetch') ? 'Siunčiamas modelis' : 'Karpoma', current / total);
-    },
+  const progress = (key, current, total) => {
+    if (onProgress && total) onProgress(key.startsWith('fetch') ? 'Siunčiamas modelis' : 'Karpoma', current / total);
   };
-  let result;
-  try {
-    result = await fn(blob, config);
-  } catch (e) {
-    // senesnės/naujesnės versijos gali nepriimti modelio pavadinimo
-    delete config.model;
-    result = await fn(blob, config);
+  // Pirmiausia tikslesnis modelis; jei telefonui per sunku – mažesnis.
+  const models = bgWorkingModel ? [bgWorkingModel] : ['isnet_fp16', 'isnet_quint8'];
+  let lastErr;
+  for (const model of models) {
+    try {
+      const result = await fn(blob, { model, output: { format: 'image/png' }, progress });
+      bgWorkingModel = model;
+      return trimTransparent(result);
+    } catch (e) {
+      console.warn('bg model failed', model, e);
+      lastErr = e;
+    }
   }
-  return trimTransparent(result);
+  throw lastErr;
 }
 
 // Mažas JPEG su baltu fonu – DI analizei (pigiau ir greičiau).
