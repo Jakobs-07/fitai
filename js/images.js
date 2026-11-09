@@ -110,3 +110,20 @@ export function blobURL(blob) {
   }
   return u;
 }
+
+// Pasukti / apversti nuotrauką. op: 'rotL' | 'rotR' | 'flipH'
+export async function transformImage(blob, op) {
+  const img = await bitmap(blob);
+  const rot = op === 'rotL' || op === 'rotR';
+  const c = document.createElement('canvas');
+  c.width = rot ? img.height : img.width;
+  c.height = rot ? img.width : img.height;
+  const ctx = c.getContext('2d');
+  ctx.translate(c.width / 2, c.height / 2);
+  if (op === 'rotR') ctx.rotate(Math.PI / 2);
+  if (op === 'rotL') ctx.rotate(-Math.PI / 2);
+  if (op === 'flipH') ctx.scale(-1, 1);
+  ctx.drawImage(img, -img.width / 2, -img.height / 2);
+  const type = blob.type === 'image/jpeg' ? 'image/jpeg' : 'image/png';
+  return canvasToBlob(c, type, 0.9);
+}

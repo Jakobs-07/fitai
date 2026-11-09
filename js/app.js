@@ -1,6 +1,6 @@
 import { db, getSetting, setSetting, uid, requestPersist, exportAll, importAll } from './db.js';
 import { DEFAULT_CATEGORIES, GROUPS, SLOTS, SEASONS, OCCASIONS, VIBE_IDEAS } from './data.js';
-import { resize, removeBackground, blobURL } from './images.js';
+import { resize, removeBackground, blobURL, transformImage } from './images.js';
 import { tagItem, styleOutfit, renderOutfit, hasKey, testKey, DEFAULT_TEXT_MODEL, DEFAULT_IMAGE_MODEL } from './ai.js';
 import { getWeather, weatherForAI, findCity } from './weather.js';
 
@@ -584,7 +584,12 @@ function openItem(id, fresh = false) {
   openSheet(`
     ${sheetTop(fresh ? 'Naujas rūbas' : 'Rūbas')}
     <div class="stack" id="itemForm" data-id="${id}">
-      <div class="item-hero"><img src="${blobURL(it.image)}" alt=""></div>
+      <div class="item-hero"><img id="itemImg" src="${blobURL(it.image)}" alt=""></div>
+      <div class="img-tools">
+        <button data-act="img-op" data-op="rotL" aria-label="Pasukti į kairę"><svg viewBox="0 0 24 24"><path d="M4 9.5A8 8 0 1 1 5.6 16"/><path d="M4 4.5v5h5"/></svg><span>Pasukti</span></button>
+        <button data-act="img-op" data-op="rotR" aria-label="Pasukti į dešinę"><svg viewBox="0 0 24 24"><path d="M20 9.5A8 8 0 1 0 18.4 16"/><path d="M20 4.5v5h-5"/></svg><span>Pasukti</span></button>
+        <button data-act="img-op" data-op="flipH" aria-label="Apversti"><svg viewBox="0 0 24 24"><path d="M12 3v18"/><path d="M9 7 3.5 17H9z"/><path d="M15 7l5.5 10H15z"/></svg><span>Apversti</span></button>
+      </div>
       ${fresh ? `<div class="label center">${S.keyOk ? 'DI užpildė informaciją – pataisyk, jei reikia' : 'Užpildyk informaciją (su DI raktu tai vyksta automatiškai)'}</div>` : ''}
       <div class="field"><label>Pavadinimas</label><input class="input" name="name" value="${esc(it.name)}" placeholder="Balta lininė palaidinė"></div>
       <div class="field"><label>Kategorija</label><select class="input" name="category">${categorySelect(it.category)}</select></div>
@@ -789,6 +794,28 @@ const actions = {
     closeSheet();
     toast('Išsaugota');
     rerender();
+  },
+  async 'img-op'(el) {
+    const it = itemById($('#itemForm').dataset.id);
+    if (!it || el.disabled) return;
+    const tools = document.querySelectorAll('.img-tools button');
+    tools.forEach((b) => (b.disabled = true));
+    try {
+      const op = el.dataset.op;
+      const sameOriginal = it.original === it.image;
+      it.image = await transformImage(it.image, op);
+      if (it.original) it.original = sameOriginal ? it.image : await transformImage(it.original, op);
+      await db.put('items', it);
+      $('#itemImg').src = blobURL(it.image);
+    } catch (e) {
+      toast('Nepavyko: ' + e.message);
+    }
+    tools.forEach((b) => (b.disabled = false));
+    if (S.tab === 'spinta' || S.tab === 'kalendorius') {
+      const y = window.scrollY;
+      view.innerHTML = await ({ spinta: viewSpinta, kalendorius: viewKalendorius })[S.tab]();
+      window.scrollTo(0, y);
+    }
   },
   async recut(el) {
     const it = itemById($('#itemForm').dataset.id);
