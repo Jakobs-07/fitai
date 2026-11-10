@@ -1,7 +1,7 @@
 import { db, getSetting, setSetting, uid, requestPersist, exportAll, importAll } from './db.js';
 import { DEFAULT_CATEGORIES, GROUPS, SLOTS, SEASONS, OCCASIONS, VIBE_IDEAS } from './data.js';
-import { resize, removeBackground, blobURL, transformImage, trimTransparent } from './images.js';
-import { tagItem, styleOutfit, renderOutfit, chatAboutOutfit, hasKey, testKey, modelsInUse } from './ai.js';
+import { resize, removeBackground, blobURL, transformImage, trimTransparent, autoEnhance } from './images.js';
+import { tagItem, styleOutfit, renderOutfit, chatAboutOutfit, enhanceItemPhoto, hasKey, testKey, modelsInUse } from './ai.js';
 import { getWeather, weatherForAI, findCity } from './weather.js';
 
 // ================= Būsena =================
@@ -626,6 +626,8 @@ async function viewNustatymai() {
     <div class="card set-block">
       <div class="switch-row">${setHead('05', 'Iškirpti foną', 'Telefone, nemokamai. Pirmą kartą atsisiunčia ~40 MB.')}
         <label class="switch" style="margin-left:auto"><input type="checkbox" id="bgToggle" ${bg ? 'checked' : ''}><span></span></label></div>
+      <div class="switch-row"><div class="set-head"><span class="n" style="visibility:hidden">05</span><div><b>Pataisyti šviesą</b><div class="small muted">Automatiškai pašviesina ir paryškina naujas nuotraukas. Nemokamai.</div></div></div>
+        <label class="switch" style="margin-left:auto"><input type="checkbox" id="enhToggle" ${(await getSetting('autoEnhance', true)) ? 'checked' : ''}><span></span></label></div>
     </div>
 
     <div class="card set-block">
@@ -764,6 +766,9 @@ async function runQueue() {
           bgFailedOnce = true;
         }
       }
+      if (await getSetting('autoEnhance', true)) {
+        try { image = await autoEnhance(image); } catch (e) { console.warn('enhance', e); }
+      }
       const item = {
         id: q.id, image, original, cutout, createdAt: Date.now(),
         category: defaultCategory(), name: '', colors: [], seasons: [], occasions: [], warmth: 3, description: '',
@@ -836,6 +841,10 @@ function openItem(id, fresh = false) {
       <div class="field"><label>Šiltumas</label><div class="warmth">${WARMTH.map((e, i) => `<button class="${it.warmth === i + 1 ? 'on' : ''}" data-act="warmth" data-v="${i + 1}">${e}</button>`).join('')}</div></div>
       <div class="label center">${ws ? `Vilkėta ${ws.count} k. · paskutinį kartą ${fmtDate(ws.last)}` : 'Dar nevilkėta'}</div>
       <button class="btn primary block" data-act="save-item">Išsaugoti</button>
+      <div class="row">
+        <button class="btn sm" style="flex:1" data-act="ai-enhance">Pagražinti su DI · ~0,10 $</button>
+        ${it.prevImage ? `<button class="btn sm ghost" data-act="undo-enhance">Atšaukti pagražinimą</button>` : ''}
+      </div>
       <div class="row">
         <button class="btn sm" style="flex:1" data-act="recut">${it.cutout ? 'Grąžinti originalą' : 'Iškirpti foną'}</button>
         <button class="btn sm danger" style="flex:1" data-act="del-item">Ištrinti</button>
@@ -1298,6 +1307,47 @@ const actions = {
     await afterOutfitEdit(o, 'Rūbas pridėtas');
   },
   noop() {},
+  async 'ai-enhance'(el) {
+    const it = itemById($('#itemForm').dataset.id);
+    if (!it) return;
+    if (!S.keyOk) return toast('Reikia DI rakto (skiltis „Daugiau“)');
+    el.disabled = true;
+    el.textContent = 'DI gražina… (~30 s)';
+    try {
+      let out = await enhanceItemPhoto(it.image, it.name);
+      // jei DI grąžino baltą foną – iškerpam nemokamai telefone
+      try {
+        const bm = await createImageBitmap(out);
+        const c = document.createElement('canvas');
+        c.width = 4; c.height = 4;
+        const x = c.getContext('2d');
+        x.drawImage(bm, 0, 0, 4, 4);
+        if (x.getImageData(0, 0, 1, 1).data[3] > 200) out = await removeBackground(out);
+      } catch (_) {}
+      out = await trimTransparent(out, 8);
+      it.prevImage = it.image;
+      it.image = await resize(out, 900, 'image/png');
+      it.cutout = true;
+      await db.put('items', it);
+      toast('Pagražinta');
+      openItem(it.id);
+      rerender();
+    } catch (e) {
+      toast('Nepavyko: ' + e.message, 5000);
+      el.disabled = false;
+      el.textContent = 'Pagražinti su DI · ~0,10 $';
+    }
+  },
+  async 'undo-enhance'() {
+    const it = itemById($('#itemForm').dataset.id);
+    if (!it?.prevImage) return;
+    it.image = it.prevImage;
+    delete it.prevImage;
+    await db.put('items', it);
+    toast('Grąžinta ankstesnė nuotrauka');
+    openItem(it.id);
+    rerender();
+  },
   erase() {
     const id = $('#itemForm')?.dataset.id;
     if (id) openEraser(id);
@@ -1412,6 +1462,10 @@ document.addEventListener('click', (e) => {
   }
 });
 document.addEventListener('change', async (e) => {
+  if (e.target.id === 'enhToggle') {
+    await setSetting('autoEnhance', e.target.checked);
+    toast(e.target.checked ? 'Naujos nuotraukos bus pataisomos' : 'Nuotraukos nebus pataisomos');
+  }
   if (e.target.id === 'bgToggle') {
     await setSetting('bgRemoval', e.target.checked);
     toast(e.target.checked ? 'Fonas bus iškerpamas' : 'Fonas nebus iškerpamas');

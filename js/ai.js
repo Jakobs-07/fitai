@@ -346,3 +346,39 @@ export async function chatAboutOutfit({ outfit, message, items, categories, weat
   if (!out.reply) out.reply = 'Atsiprašau, nesupratau. Pabandyk perrašyti kitaip.';
   return out;
 }
+
+// ---- Rūbo nuotraukos pagražinimas su DI (kaip parduotuvės nuotrauka) ----
+export async function enhanceItemPhoto(blob, name = '') {
+  const png = await toPngForAI(blob, 1024);
+  const prompt =
+    'Turn this photo into a clean, professional e-commerce product photo of the SAME garment' + (name ? ` (${name})` : '') + '. ' +
+    'Keep it 100% the same item: identical colors, pattern, print, texture, fabric, cut, length, buttons, logos and all details. ' +
+    'Only make it look neat: smooth out wrinkles, lay it straight and symmetric as a tidy flat lay, even soft studio lighting. ' +
+    'Show only the garment, centered, nothing else, on a fully transparent background (or plain pure white if transparency is impossible). ' +
+    'Do not add, remove or redesign anything.';
+  const send = async (model, extras) => {
+    const body = new FormData();
+    body.append('model', model);
+    body.append('image[]', png, 'item.png');
+    body.append('prompt', prompt);
+    body.append('n', '1');
+    if (extras) { body.append('background', 'transparent'); body.append('quality', 'medium'); body.append('size', '1024x1024'); }
+    const r = await fetch(`${API}/images/edits`, { method: 'POST', headers: { Authorization: `Bearer ${await key()}` }, body });
+    if (!r.ok) await fail(r);
+    return r;
+  };
+  const res = await withModel('image', async (model) => {
+    try {
+      return await send(model, true);
+    } catch (e) {
+      if (!e.modelMissing && /background|size|quality|parameter|transparen/i.test(e.message)) return send(model, false);
+      throw e;
+    }
+  });
+  const j = await res.json();
+  const b64 = j.data?.[0]?.b64_json;
+  if (b64) return (await fetch(`data:image/png;base64,${b64}`)).blob();
+  const url = j.data?.[0]?.url;
+  if (url) return (await fetch(url)).blob();
+  throw new Error('Pagražinti nepavyko.');
+}
