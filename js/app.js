@@ -27,6 +27,8 @@ const S = {
   selfPhoto: null,
   selecting: false,
   chatting: null,
+  profile: { about: '', learned: [] },
+  events: [],
   sel: new Set(),
 };
 
@@ -209,6 +211,25 @@ function chatHTML(o) {
   </div>`;
 }
 
+// ---- Stiliaus profilis: ką stilistė žino apie jos skonį ----
+const itemNames = (ids) => ids.map(itemById).filter(Boolean).map((i) => i.name || catById(i.category)?.label || 'rūbas');
+
+function styleCtx() {
+  const favorites = S.outfits.filter((o) => o.favorite).sort((a, b) => b.createdAt - a.createdAt).slice(0, 10)
+    .map((o) => itemNames(o.itemIds).join(' + ')).filter(Boolean);
+  return { about: S.profile.about, learned: S.profile.learned, favorites, events: S.events.slice(-15).map((e) => e.text) };
+}
+
+async function logEvent(text) {
+  S.events.push({ text, at: Date.now() });
+  S.events = S.events.slice(-30);
+  await setSetting('styleEvents', S.events);
+}
+
+async function saveProfile() {
+  await setSetting('styleProfile', S.profile);
+}
+
 async function doRender(o, mode) {
   if (!S.keyOk) return toast('Reikia API rakto (skiltis „Daugiau“)');
   if (S.rendering) return toast('Vaizdas jau kuriamas – palauk');
@@ -251,7 +272,7 @@ async function sendChat(id, text) {
   try {
     const r = await chatAboutOutfit({
       outfit: o, message: text, items: S.items, categories: S.categories,
-      weather: weatherForAI(S.weather), wearStats: wearStats(),
+      weather: weatherForAI(S.weather), wearStats: wearStats(), style: styleCtx(),
     });
     const changed = !!r.changed && r.itemIds.join() !== o.itemIds.join();
     o.chat.push({ role: 'assistant', text: r.reply, changed, at: Date.now() });
@@ -264,6 +285,11 @@ async function sendChat(id, text) {
       S.renderTab = 'flat';
     }
     if (r.imageNotes) o.imageNotes = r.imageNotes;
+    if (r.learned && !S.profile.learned.some((l) => l.toLowerCase() === r.learned.toLowerCase())) {
+      S.profile.learned = [...S.profile.learned, r.learned].slice(-40);
+      await saveProfile();
+      setTimeout(() => toast('Stilistė įsiminė: ' + r.learned, 4000), 300);
+    }
     await saveOutfit(o);
     renderAfter = r.render;
   } catch (e) {
@@ -477,7 +503,20 @@ async function viewNustatymai() {
     </div>
 
     <div class="card set-block">
-      ${setHead('02', 'Mano nuotrauka', 'Režimui „Ant manęs“')}
+      ${setHead('02', 'Mano stilius', 'Stilistė į tai atsižvelgia kiekvieną kartą')}
+      <div class="field"><label>Apie mano stilių (rašyk laisvai)</label>
+        <textarea class="input" id="styleAbout" placeholder="Pvz. mėgstu oversized, neutralias spalvas, nemėgstu aukštakulnių, darbe dėviu džinsus…">${esc(S.profile.about)}</textarea></div>
+      <button class="btn sm" style="align-self:flex-start" data-act="save-about">Išsaugoti</button>
+      <div class="field"><label>Ką stilistė išmoko iš pokalbių</label>
+        ${S.profile.learned.length ? `<ul class="learned">${S.profile.learned.map((l, i) => `<li><span>${esc(l)}</span><button class="x" data-act="del-learned" data-i="${i}">Šalinti</button></li>`).join('')}</ul>`
+          : `<span class="small muted">Kol kas nieko. Kai pokalbyje pasakysi, kas tau patinka ar ne, stilistė tai įsimins.</span>`}
+      </div>
+      <span class="small muted">Stilistė taip pat mato, kokius fitus pažymėjai mėgstamais, kuriuos atmetei, ką pati keitei ir ką vilkėjai.</span>
+      ${S.profile.learned.length || S.events.length ? `<button class="btn sm ghost" style="align-self:flex-start;padding-left:0" data-act="reset-style">Pamiršti viską, ką išmoko</button>` : ''}
+    </div>
+
+    <div class="card set-block">
+      ${setHead('03', 'Mano nuotrauka', 'Režimui „Ant manęs“')}
       <div class="row" style="gap:16px;align-items:flex-start">
         ${S.selfPhoto ? `<img class="self-photo" src="${blobURL(S.selfPhoto)}" alt="">` : `<div class="self-photo" style="display:grid;place-items:center"><span class="label">Nėra</span></div>`}
         <div class="stack" style="gap:10px"><span class="small muted">Geriausia pilno ūgio, stovint, gerai apšviesta. Siunčiama į OpenAI tik spaudžiant „Sugeneruoti“.</span>
@@ -486,18 +525,18 @@ async function viewNustatymai() {
     </div>
 
     <div class="card set-block">
-      ${setHead('03', 'Orai', `Dabar: ${esc(loc ? (loc.auto ? 'pagal telefono vietą' : loc.name) : 'pagal telefono vietą')}`)}
+      ${setHead('04', 'Orai', `Dabar: ${esc(loc ? (loc.auto ? 'pagal telefono vietą' : loc.name) : 'pagal telefono vietą')}`)}
       <div class="row"><input class="input" id="city" placeholder="Miestas, pvz. Kaunas" style="flex:1"><button class="btn sm" data-act="set-city">OK</button></div>
       <button class="btn sm ghost" style="align-self:flex-start" data-act="auto-loc">Naudoti telefono vietą</button>
     </div>
 
     <div class="card set-block">
-      <div class="switch-row">${setHead('04', 'Iškirpti foną', 'Telefone, nemokamai. Pirmą kartą atsisiunčia ~40 MB.')}
+      <div class="switch-row">${setHead('05', 'Iškirpti foną', 'Telefone, nemokamai. Pirmą kartą atsisiunčia ~40 MB.')}
         <label class="switch" style="margin-left:auto"><input type="checkbox" id="bgToggle" ${bg ? 'checked' : ''}><span></span></label></div>
     </div>
 
     <div class="card set-block">
-      ${setHead('05', 'Mano kategorijos', 'Pridėk savų, jei trūksta')}
+      ${setHead('06', 'Mano kategorijos', 'Pridėk savų, jei trūksta')}
       ${custom.map((c) => `<div class="row"><span style="flex:1">${esc(c.label)} <span class="label">${SLOTS[c.slot].label}</span></span><button class="btn sm danger" data-act="del-cat" data-id="${c.id}">Šalinti</button></div>`).join('')}
       <input class="input" id="newCat" placeholder="Pvz. Kombinezonai">
       <div class="row"><select class="input" id="newCatSlot" style="flex:1">${Object.entries(SLOTS).map(([k, v]) => `<option value="${k}">${v.label}</option>`).join('')}</select>
@@ -505,7 +544,7 @@ async function viewNustatymai() {
     </div>
 
     <div class="card set-block">
-      ${setHead('06', 'Atsarginė kopija', `Išsaugok spintą į iCloud Drive (Failai), kad niekas nedingtų.${usage}`)}
+      ${setHead('07', 'Atsarginė kopija', `Išsaugok spintą į iCloud Drive (Failai), kad niekas nedingtų.${usage}`)}
       <div class="row"><button class="btn dark" style="flex:1" data-act="export">Išsaugoti kopiją</button><button class="btn" style="flex:1" data-act="import">Atkurti</button></div>
     </div>
 
@@ -757,7 +796,7 @@ async function doStyle(vibe, exclude = []) {
   try {
     const r = await styleOutfit({
       vibe, items: S.items, categories: S.categories,
-      weather: weatherForAI(S.weather), wearStats: wearStats(), exclude,
+      weather: weatherForAI(S.weather), wearStats: wearStats(), exclude, style: styleCtx(),
     });
     const o = {
       id: uid(), title: r.title, explanation: r.explanation, tip: r.tip, vibe,
@@ -789,6 +828,7 @@ const actions = {
   },
   restyle(el) {
     const o = outfitById(el.dataset.id);
+    logEvent(`Atmetė fitą ir paprašė kito: ${itemNames(o.itemIds).join(' + ')}`);
     doStyle(o.vibe || '', o.itemIds);
   },
   rtab(el) {
@@ -803,6 +843,7 @@ const actions = {
     const o = outfitById(el.dataset.id);
     o.favorite = !o.favorite;
     await saveOutfit(o);
+    if (o.favorite) logEvent(`Pažymėjo mėgstamu: ${itemNames(o.itemIds).join(' + ')}`);
     toast(o.favorite ? 'Pridėta prie mėgstamų' : 'Pašalinta iš mėgstamų');
     closeSheet();
     rerender();
@@ -813,6 +854,7 @@ const actions = {
     const w = { id: uid(), date, outfitId: o.id, itemIds: [...o.itemIds] };
     await db.put('worn', w);
     S.worn.push(w);
+    logEvent(`Vilkėjo: ${itemNames(o.itemIds).join(' + ')}`);
     toast('Pažymėta kalendoriuje');
     closeSheet();
     rerender();
@@ -1126,12 +1168,14 @@ const actions = {
   async 'ofit-swap'(el) {
     const o = outfitById(el.dataset.o);
     o.itemIds = o.itemIds.map((id) => (id === el.dataset.from ? el.dataset.id : id));
+    logEvent(`Fite pati pakeitė „${itemNames([el.dataset.from])[0]}“ į „${itemNames([el.dataset.id])[0]}“`);
     await afterOutfitEdit(o, 'Rūbas pakeistas');
   },
   async 'ofit-remove'(el) {
     const o = outfitById(el.dataset.o);
     if (o.itemIds.length <= 1) return toast('Fite turi likti bent vienas rūbas');
     o.itemIds = o.itemIds.filter((id) => id !== el.dataset.id);
+    logEvent(`Iš fito pati išėmė „${itemNames([el.dataset.id])[0]}“`);
     await afterOutfitEdit(o, 'Rūbas išimtas');
   },
   'ofit-add'(el) {
@@ -1149,9 +1193,29 @@ const actions = {
   async 'ofit-addpick'(el) {
     const o = outfitById(el.dataset.o);
     if (!o.itemIds.includes(el.dataset.id)) o.itemIds.push(el.dataset.id);
+    logEvent(`Į fitą pati pridėjo „${itemNames([el.dataset.id])[0]}“`);
     await afterOutfitEdit(o, 'Rūbas pridėtas');
   },
   noop() {},
+  async 'save-about'() {
+    S.profile.about = $('#styleAbout').value.trim();
+    await saveProfile();
+    toast('Stilius išsaugotas');
+  },
+  async 'del-learned'(el) {
+    S.profile.learned.splice(+el.dataset.i, 1);
+    await saveProfile();
+    rerender();
+  },
+  async 'reset-style'() {
+    if (!confirm('Ištrinti viską, ką stilistė išmoko apie tavo skonį? Tavo paties aprašymas liks.')) return;
+    S.profile.learned = [];
+    S.events = [];
+    await saveProfile();
+    await setSetting('styleEvents', []);
+    toast('Stilistė pamiršo išmoktus dalykus');
+    rerender();
+  },
   async 'clear-notes'(el) {
     const o = outfitById(el.dataset.id);
     o.imageNotes = '';
@@ -1260,6 +1324,8 @@ async function loadAll() {
   S.currentId = await getSetting('currentOutfit');
   S.keyOk = await hasKey();
   S.selfPhoto = await getSetting('selfPhoto');
+  S.profile = { about: '', learned: [], ...((await getSetting('styleProfile')) || {}) };
+  S.events = (await getSetting('styleEvents')) || [];
 }
 
 async function loadWeather() {

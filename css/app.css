@@ -308,6 +308,9 @@ textarea.input { resize: none; min-height: 76px; line-height: 1.35; font-size: 1
 .status-no { color: var(--wine-2); }
 .steps { margin: 0; padding-left: 20px; line-height: 1.55; }
 .steps li { margin-bottom: 6px; }
+.learned { list-style: none; margin: 0; padding: 0; }
+.learned li { display: flex; align-items: baseline; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); font-family: var(--serif); font-style: italic; font-size: 17px; }
+.learned li span { flex: 1; }
 .switch-row { display: flex; align-items: center; gap: 14px; }
 .switch { position: relative; width: 48px; height: 28px; flex: none; }
 .switch input { opacity: 0; width: 0; height: 0; }

@@ -133,7 +133,19 @@ const STYLIST =
   'Fitus sudarai TIK iš pateiktos spintos rūbų (naudok tikslius id). ' +
   'Taisyklės: arba suknelė (vieta onepiece), arba viršus + apačia; batai jei yra; viršutinis rūbas jei vėsu; ' +
   'pėdkelnės/kojinės jei tinka; 0–3 aksesuarai. Atsižvelk į orus, progą, spalvų derinius. ' +
-  'Jei įmanoma, rinkis rečiau vilkėtus rūbus, bet stilius svarbiau. ';
+  'Jei įmanoma, rinkis rečiau vilkėtus rūbus, bet stilius svarbiau. ' +
+  'SVARBIAUSIA – jos stiliaus profilis (jos_stilius): ką ji pati apie save parašė, ką tu apie ją išmokai, ' +
+  'kokie fitai jai patiko, kuriuos atmetė ir ką pati keitė. Derink prie jos skonio, nekartok to, kas jai nepatiko. ';
+
+function profileFor(style) {
+  if (!style) return null;
+  const p = {};
+  if (style.about) p.ji_pati_apie_save = style.about;
+  if (style.learned?.length) p.ka_ismokai_apie_jos_skoni = style.learned;
+  if (style.favorites?.length) p.patike_fitai = style.favorites;
+  if (style.events?.length) p.paskutiniai_jos_veiksmai = style.events;
+  return Object.keys(p).length ? p : null;
+}
 
 function wardrobeFor(items, categories, wearStats) {
   const catById = Object.fromEntries(categories.map((c) => [c.id, c]));
@@ -156,7 +168,7 @@ function wardrobeFor(items, categories, wearStats) {
   });
 }
 
-export async function styleOutfit({ vibe, items, categories, weather, wearStats, exclude = [] }) {
+export async function styleOutfit({ vibe, items, categories, weather, wearStats, exclude = [], style = null }) {
   const wardrobe = wardrobeFor(items, categories, wearStats);
   const today = new Date().toISOString().slice(0, 10);
   const out = await chatJSON([
@@ -172,6 +184,7 @@ export async function styleOutfit({ vibe, items, categories, weather, wearStats,
       role: 'user',
       content: JSON.stringify({
         noras: vibe || 'Kasdienis, stilingas outfitas šiandienai',
+        jos_stilius: profileFor(style),
         data: today,
         orai: weather || 'nežinomi',
         nesiulyti_tiksliai_tokio_pat_derinio_kaip: exclude,
@@ -259,7 +272,7 @@ export async function testKey(k) {
 }
 
 // ---- Pokalbis su stiliste apie konkretų fitą ----
-export async function chatAboutOutfit({ outfit, message, items, categories, weather, wearStats }) {
+export async function chatAboutOutfit({ outfit, message, items, categories, weather, wearStats, style = null }) {
   const history = (outfit.chat || []).slice(-12).map((m) => ({
     role: m.role === 'user' ? 'user' : 'assistant',
     content: m.role === 'user' ? m.text : JSON.stringify({ reply: m.text }),
@@ -280,7 +293,10 @@ export async function chatAboutOutfit({ outfit, message, items, categories, weat
         'Atsakyk TIK JSON: {"reply": "tavo atsakymas", "changed": true/false, "itemIds": [visi fito rūbų id po pakeitimo], ' +
         '"title": "pavadinimas (jei pasikeitė fitas)", "explanation": "2–3 sakiniai apie naują derinį (jei pasikeitė)", "tip": "patarimas (jei pasikeitė)", ' +
         '"render": null | "mannequin" | "me", "imageNotes": "" }. ' +
-        'Jei spintoje nėra to, ko ji prašo, pasakyk tai ir pasiūlyk artimiausią variantą.',
+        'Jei spintoje nėra to, ko ji prašo, pasakyk tai ir pasiūlyk artimiausią variantą. ' +
+        'Papildomai JSON lauke "learned": jei iš jos žodžių aiškiai matosi ILGALAIKIS skonio pomėgis ar nemėgimas ' +
+        '(pvz. "nemėgstu geltonos", "visada noriu patogių batų"), parašyk jį vienu trumpu sakiniu trečiu asmeniu ' +
+        '(pvz. "Nemėgsta geltonos spalvos."). Vienkartiniams prašymams ("šiandien be batų") ir tam, ką jau žinai, – tuščia eilutė.',
     },
     {
       role: 'user',
@@ -291,6 +307,7 @@ export async function chatAboutOutfit({ outfit, message, items, categories, weat
         dabartinis_fitas: { pavadinimas: outfit.title, itemIds: outfit.itemIds },
         jau_sugeneruoti_vaizdai: Object.keys(outfit.renders || {}),
         esamos_vaizdo_pastabos: outfit.imageNotes || '',
+        jos_stilius: profileFor(style),
         spinta: wardrobeFor(items, categories, wearStats),
       }),
     },
@@ -302,6 +319,7 @@ export async function chatAboutOutfit({ outfit, message, items, categories, weat
   out.itemIds = (out.itemIds || []).filter((id) => valid.has(id));
   if (!out.itemIds.length) out.changed = false;
   if (!['mannequin', 'me'].includes(out.render)) out.render = null;
+  out.learned = typeof out.learned === 'string' ? out.learned.trim() : '';
   out.imageNotes = typeof out.imageNotes === 'string' ? out.imageNotes.trim() : '';
   if (!out.reply) out.reply = 'Atsiprašau, nesupratau. Pabandyk perrašyti kitaip.';
   return out;
