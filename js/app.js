@@ -120,17 +120,24 @@ function flatlayHTML(itemIds, mini = false, stamp = '', opts = {}) {
   for (const it of items) (by[slotOf(it)] = by[slotOf(it)] || []).push(it);
   const itemAttr = (it) => (mini || opts.static ? '' : opts.oid ? `data-act="ofit-item" data-o="${opts.oid}" data-id="${it.id}"` : `data-act="item" data-id="${it.id}"`);
   const img = (it, slot) => `<div class="fl-item ${slot} cat-${it.category}" ${itemAttr(it)}><img src="${blobURL(it.image)}" alt="${esc(it.name)}" loading="lazy"></div>`;
-  const row = (arr, slot) => (arr && arr.length ? (arr.length > 1 ? `<div class="fl-row">${arr.map((i) => img(i, slot)).join('')}</div>` : img(arr[0], slot)) : '');
-  let main = row(by.head, 'head');
-  if (by.outer && by.top) {
-    main += `<div class="fl-row">${by.outer.map((i) => img(i, 'outer')).join('')}${by.top.map((i) => img(i, 'top')).join('')}</div>`;
-  } else {
-    main += row(by.outer, 'outer') + row(by.top, 'top');
-  }
-  main += row(by.onepiece, 'onepiece') + row(by.bottom, 'bottom') + row(by.legwear, 'legwear') + row(by.shoes, 'shoes');
-  const side = by.side ? `<div class="fl-side">${by.side.map((i) => img(i, 'side')).join('')}</div>` : '';
+  const all = (arr, slot) => (arr || []).map((i) => img(i, slot)).join('');
+
+  // Kairė kolona: viršus (sluoksniais) → suknelė → apačia → pėdkelnės
+  const uppers = [...(by.top || []).map((i) => [i, 'top']), ...(by.outer || []).map((i) => [i, 'outer'])];
+  let main = '';
+  if (uppers.length > 1) main += `<div class="fl-layer">${uppers.map(([i, sl]) => img(i, sl)).join('')}</div>`;
+  else if (uppers.length) main += img(uppers[0][0], uppers[0][1]);
+  main += all(by.onepiece, 'onepiece') + all(by.bottom, 'bottom');
+  const tights = (by.legwear || []).filter((i) => i.category === 'tights');
+  const socks = (by.legwear || []).filter((i) => i.category !== 'tights');
+  main += all(tights, 'legwear');
+  // jei nėra nei viršaus, nei apačios – kojinės lieka kairėje
+  const mainEmpty = !main;
+  // Dešinė kolona: galvos aksesuarai → kiti aksesuarai → kojinės → batai
+  let side = all(by.head, 'head') + all(by.side, 'side') + (mainEmpty ? '' : all(socks, 'legwear')) + all(by.shoes, 'shoes');
+  if (mainEmpty) main = all(socks, 'legwear');
   const zoom = opts.oid ? `data-act="zoom" data-o="${opts.oid}"` : '';
-  return `<div class="flatlay ${mini ? 'mini' : ''} ${opts.big ? 'big' : ''}" ${zoom}>${stamp ? `<span class="label fl-stamp">${stamp}</span>` : ''}<div class="fl-main">${main}</div>${side}</div>`;
+  return `<div class="flatlay ${mini ? 'mini' : ''} ${opts.big ? 'big' : ''} ${side ? '' : 'solo'}" ${zoom}><div class="fl-main">${main}</div>${side ? `<div class="fl-side">${side}</div>` : ''}</div>`;
 }
 
 function creditsHTML(o) {

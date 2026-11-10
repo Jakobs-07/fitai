@@ -150,37 +150,42 @@ textarea.input { resize: none; min-height: 76px; line-height: 1.35; font-size: 1
 .seg button { padding: 8px 0; font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); border-bottom: 1.5px solid transparent; margin-bottom: -1px; }
 .seg button.on { color: var(--ink); border-bottom-color: var(--wine); }
 
-.flatlay {
-  position: relative; display: flex; gap: 10px; padding: 22px 14px; margin: 14px 18px 0;
-  min-height: 260px; border-radius: 2px; background: var(--sand) var(--grain);
-}
-.fl-main { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; }
-.fl-side { width: 26%; display: flex; flex-direction: column; justify-content: center; gap: 12px; }
-.fl-row { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; }
-.fl-item { position: relative; display: flex; align-items: center; justify-content: center; }
-.fl-item.bottom, .fl-item.onepiece { z-index: 2; }
-.fl-item img { object-fit: contain; filter: drop-shadow(0 10px 12px rgba(50, 30, 20, .22)); }
-.fl-item.head img { max-height: 70px; }
-.fl-item.outer img, .fl-item.top img { max-height: 170px; }
-.fl-row .fl-item { flex: 1; }
-.fl-row .fl-item img { max-height: 150px; }
-.fl-item.onepiece img { max-height: 260px; }
-.fl-item.bottom img { max-height: 190px; }
-.fl-item.legwear img { max-height: 100px; }
-.fl-item.shoes img { max-height: 90px; }
-.fl-side .fl-item img { max-height: 90px; }
-.flatlay.mini { margin: 0; padding: 12px 8px; min-height: 0; gap: 4px; }
-.flatlay.mini .fl-item img { max-height: 54px; }
-.flatlay.mini .fl-item.onepiece img { max-height: 90px; }
-.flatlay.mini .fl-item.bottom img, .flatlay.mini .fl-item.top img, .flatlay.mini .fl-item.outer img { max-height: 64px; }
-.flatlay.mini .fl-item.head img, .flatlay.mini .fl-item.shoes img, .flatlay.mini .fl-item.legwear img { max-height: 32px; }
-.flatlay.mini .fl-side .fl-item img { max-height: 30px; }
-.flatlay .fl-item.cat-tights { z-index: 1; margin-top: -78px; }
-.flatlay .fl-item.legwear.cat-tights img { max-height: 220px; }
-.flatlay.mini .fl-item.cat-tights { margin-top: -26px; }
-.flatlay.mini .fl-item.legwear.cat-tights img { max-height: 74px; }
-.fl-stamp { position: absolute; left: 12px; top: 10px; }
 
+/* ---- Koliažas (Pinterest stilius): kairėje rūbai, dešinėje aksesuarai ir batai ---- */
+.flatlay {
+  position: relative; display: flex; gap: 3%; align-items: stretch;
+  padding: 20px 14px; margin: 14px 18px 0; min-height: 240px; border-radius: 2px;
+  background: #F8F6F2;
+}
+.flatlay.solo .fl-main { flex-basis: 80%; margin: 0 auto; }
+.fl-main { flex: 0 0 63%; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.fl-side { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: space-around; align-items: center; gap: 12px; padding: 4px 0; }
+.fl-item { position: relative; display: flex; justify-content: center; align-items: center; }
+.fl-item img { display: block; max-width: 100%; object-fit: contain; filter: drop-shadow(0 8px 10px rgba(50, 30, 20, .15)); }
+.fl-main > .fl-item img, .fl-layer .fl-item img { width: 100%; height: auto; }
+.fl-main > .fl-item { width: 86%; z-index: 2; }
+.fl-main > .fl-item.head { width: 38%; margin-bottom: 3%; }
+.fl-main > .fl-item.top, .fl-main > .fl-item.outer { width: 92%; z-index: 3; }
+.fl-main > .fl-item.onepiece { width: 86%; }
+.fl-main > .fl-item.bottom { width: 80%; margin-top: -7%; }
+.fl-main > .fl-item.cat-tights { width: 50%; z-index: 1; margin-top: -24%; }
+.fl-main > .fl-item.legwear:not(.cat-tights) { width: 46%; margin-top: 2%; }
+.fl-layer { position: relative; z-index: 3; display: flex; align-items: flex-start; width: 100%; }
+.fl-layer .fl-item { flex: 0 0 58%; }
+.fl-layer .fl-item + .fl-item { margin-left: -16%; margin-top: 5%; }
+.fl-side .fl-item { width: 100%; }
+.fl-side .fl-item img { max-width: 90%; max-height: 110px; }
+.fl-side .fl-item.side img { max-height: 135px; }
+.fl-side .fl-item.head img { max-height: 70px; }
+.fl-side .fl-item.shoes img { max-height: 100px; }
+.flatlay.mini { margin: 0; padding: 10px 8px; min-height: 0; }
+.flatlay.mini .fl-side { gap: 4px; }
+.flatlay.mini .fl-side .fl-item img { max-height: 34px; }
+.flatlay.mini .fl-side .fl-item.side img { max-height: 42px; }
+.lightbox { overflow-y: auto; }
+.lightbox .flatlay { flex: none; margin: 0 auto; width: min(100%, 62dvh); }
+.flatlay.big .fl-side .fl-item img { max-height: 18dvh; }
+.flatlay.big .fl-side .fl-item.side img { max-height: 22dvh; }
 .flatlay[data-act=zoom] { cursor: zoom-in; }
 .zoom-hint { margin: 8px 18px 0; font-size: 9.5px; }
 .credits li { cursor: pointer; }
@@ -194,18 +199,6 @@ textarea.input { resize: none; min-height: 76px; line-height: 1.35; font-size: 1
 .lb-img { flex: 1; min-height: 0; display: grid; place-items: center; }
 .lb-img img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 2px; }
 .lb-top { display: flex; justify-content: space-between; align-items: center; padding: 0 4px 10px; }
-.lightbox .flatlay { flex: 1; margin: 0; min-height: 0; justify-content: center; align-items: center; }
-.flatlay.big .fl-main { justify-content: center; gap: 6px; }
-.flatlay.big .fl-item.head img { max-height: 9dvh; }
-.flatlay.big .fl-item.outer img, .flatlay.big .fl-item.top img { max-height: 28dvh; }
-.flatlay.big .fl-row .fl-item img { max-height: 26dvh; }
-.flatlay.big .fl-item.onepiece img { max-height: 48dvh; }
-.flatlay.big .fl-item.bottom img { max-height: 32dvh; }
-.flatlay.big .fl-item.legwear img { max-height: 13dvh; }
-.flatlay.big .fl-item.shoes img { max-height: 12dvh; }
-.flatlay.big .fl-side .fl-item img { max-height: 14dvh; }
-.flatlay.big .fl-item.cat-tights { margin-top: -10dvh; }
-.flatlay.big .fl-item.legwear.cat-tights img { max-height: 38dvh; }
 .credits { list-style: none; margin: 14px 18px 0; padding: 0; }
 .credits li { display: flex; gap: 10px; align-items: baseline; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
 .credits li .n { font-family: var(--mono); font-size: 10px; color: var(--muted); width: 22px; }
