@@ -216,27 +216,49 @@ export async function renderOutfit({ items, categories, mode, selfPhoto, notes =
     list.push(`Image ${idx}: ${it.name || ''} (${c ? c.label : ''})`);
     idx++;
   }
+  const slotOf = (it) => catById[it.category]?.slot;
+  const hasShoes = items.some((it) => slotOf(it) === 'shoes');
+  const hosiery = items.filter((it) => slotOf(it) === 'legwear');
+  const hasTights = hosiery.some((it) => it.category === 'tights');
+  const hasSocks = hosiery.some((it) => it.category !== 'tights');
+  const n = list.length;
+  const garments = `The outfit consists of exactly ${n} item${n > 1 ? 's' : ''} listed below. EVERY one of them must be clearly visible in the final image:\n${list.join('\n')}`;
   if (mode === 'me') {
     prompt =
-      'Fashion photo. Show the woman from image 1 wearing EXACTLY the clothing items from the other images, ' +
-      'combined as one outfit. Keep her face, hair, body shape and skin tone identical to image 1. ' +
+      'Realistic fashion photo. Show the woman from image 1 wearing EXACTLY the clothing items from the other images, ' +
+      'combined as one outfit. Keep her face, hair, body shape, height proportions and skin tone identical to image 1. ' +
       'Reproduce every garment faithfully: same color, pattern, texture, cut and details. ' +
-      'Full body, standing, natural relaxed pose, head to toe visible including shoes, plain warm beige studio background, ' +
-      'soft natural light, high-end editorial look.\n' +
-      list.join('\n');
+      'Full body, standing, natural relaxed pose, head to toe visible, plain warm beige studio background, ' +
+      'soft natural light, high-end editorial look.\n' + garments;
   } else {
     prompt =
-      'Fashion e-commerce photo of a neutral, faceless matte white female mannequin (full body, head to toe) ' +
-      'wearing EXACTLY the clothing items from the provided images, combined as one outfit. ' +
+      'Realistic fashion e-commerce photo of a neutral, faceless matte white female mannequin, full body, head to toe, ' +
+      'with the realistic proportions of an average-height woman (about 165 cm tall): natural leg length and torso, NOT an elongated, ' +
+      'extra-tall runway mannequin. The mannequin stands naturally and fits fully in the frame with some empty space above the head and below the feet. ' +
+      'It wears EXACTLY the clothing items from the provided images, combined as one outfit. ' +
       'Reproduce every garment faithfully: same color, pattern, texture, cut and details. ' +
-      'Plain warm beige studio background, soft even lighting, centered, entire outfit including shoes visible.\n' +
-      list.join('\n');
+      'Plain warm beige studio background, soft even lighting, centered.\n' + garments;
   }
-  const hasShoes = items.some((it) => catById[it.category]?.slot === 'shoes');
   prompt +=
-    '\nSTRICT RULES: Use ONLY the garments shown in the provided item images. ' +
-    'Do NOT add any other clothing, shoes, socks, tights, bags, jewelry or accessories that are not in the images. ' +
-    (hasShoes ? '' : 'No shoes are provided, so show bare feet without any shoes or socks. ');
+    '\nPOSE: standing flat-footed with both heels and soles fully on the floor, weight evenly on both feet – NOT on tiptoes, ' +
+    'no raised heels, no ballet/arched feet (unless the provided shoes themselves have high heels). ' +
+    '\nSTRICT RULES: Use ONLY the items shown in the provided images. ' +
+    'Do NOT add any other clothing, shoes, socks, tights, bags, jewelry or accessories that are not in the images. ';
+  if (hasTights) {
+    prompt +=
+      'The tights/pantyhose are worn exactly like real hosiery: one smooth continuous layer of fabric covering the legs and the whole foot, ' +
+      'following the natural foot shape. The foot looks like a normal foot in tights – NO separated or individually wrapped toes, no glove-like toes, no visible toe gaps. ';
+  }
+  if (hasSocks) {
+    prompt += hasTights
+      ? 'The socks are worn OVER the tights, clearly visible on the feet and ankles. '
+      : 'The socks are clearly visible on the feet and ankles. ';
+  }
+  if (!hasShoes) {
+    prompt += hosiery.length
+      ? 'No shoes are provided: the feet wear only the provided tights/socks, no shoes. '
+      : 'No shoes are provided: show natural bare feet, no shoes and no socks. ';
+  }
   if (notes) prompt += `\nAdditional instructions from the client (follow them): ${notes}`;
   fd.append('prompt', prompt);
   fd.append('n', '1');

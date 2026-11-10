@@ -153,7 +153,7 @@ function outfitCardHTML(o) {
     if (busy && S.rendering.mode === tab) {
       visual = `<div class="render-box">${loadingHTML('Kuriamas vaizdas…')}<span class="label" style="margin-top:-20px">Iki minutės</span></div>`;
     } else if (blob) {
-      visual = `<div class="render-box"><img src="${blobURL(blob)}" alt="Outfitas"></div>
+      visual = `<div class="render-box" data-act="zoom-img" data-o="${o.id}" data-mode="${tab}"><img src="${blobURL(blob)}" alt="Outfitas"></div>
         <div class="row" style="margin:10px 18px 0;justify-content:space-between"><button class="btn sm ghost" style="padding-left:0;white-space:nowrap" data-act="render" data-mode="${tab}">Sugeneruoti iš naujo</button>
         ${o.imageNotes ? `<button class="btn sm ghost" style="padding-right:0;white-space:nowrap" data-act="clear-notes" data-id="${o.id}">Išvalyti pastabas</button>` : ''}</div>
         ${o.imageNotes ? `<div class="label" style="margin:2px 18px 0">Vaizdo pastabos: ${esc(o.imageNotes)}</div>` : ''}`;
@@ -1222,6 +1222,17 @@ const actions = {
     lb.innerHTML = `<div class="lb-top"><span class="label">Nº ${lookNo(o)} · ${esc(o.title || '')}</span><button class="x" data-act="lb-close">Uždaryti</button></div>
       ${flatlayHTML(o.itemIds, false, '', { big: true, static: true })}`;
     lb.addEventListener('click', (ev) => { if (!ev.target.closest('.lb-top') || ev.target.closest('[data-act=lb-close]')) lb.remove(); });
+    document.body.appendChild(lb);
+  },
+  'zoom-img'(el) {
+    const o = outfitById(el.dataset.o);
+    const blob = o?.renders?.[el.dataset.mode];
+    if (!blob) return;
+    const lb = document.createElement('div');
+    lb.className = 'lightbox';
+    lb.innerHTML = `<div class="lb-top"><span class="label">Nº ${lookNo(o)} · ${el.dataset.mode === 'me' ? 'Ant manęs' : 'Manekenas'}</span><button class="x">Uždaryti</button></div>
+      <div class="lb-img"><img src="${blobURL(blob)}" alt=""></div>`;
+    lb.addEventListener('click', () => lb.remove());
     document.body.appendChild(lb);
   },
   'lb-close'() {
