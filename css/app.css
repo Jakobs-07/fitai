@@ -256,8 +256,8 @@ textarea.input { resize: none; min-height: 76px; line-height: 1.35; font-size: 1
   padding: 6px 6px 0; border-radius: 2px; text-align: left;
   box-shadow: 0 1px 1px rgba(0,0,0,.05), 0 8px 18px -10px rgba(60, 40, 20, .35);
 }
-.tile .ph-wrap { aspect-ratio: 3 / 4; background: var(--paper-2); display: grid; place-items: center; overflow: hidden; padding: 6px; }
-.tile img { width: 100%; height: 100%; object-fit: contain; }
+.tile .ph-wrap { position: relative; aspect-ratio: 3 / 4; background: var(--paper-2); overflow: hidden; }
+.tile .ph-wrap img { position: absolute; inset: 6px; width: calc(100% - 12px); height: calc(100% - 12px); object-fit: contain; }
 .tile .cap { font-family: var(--mono); font-size: 9px; letter-spacing: .04em; text-transform: uppercase; padding: 6px 1px 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
 .grid .tile:nth-child(3n+1) { transform: rotate(-.6deg); }
 .grid .tile:nth-child(3n+2) { transform: rotate(.5deg) translateY(4px); }
