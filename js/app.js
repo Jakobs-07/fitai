@@ -864,14 +864,10 @@ const actions = {
   },
   pick(el) {
     const id = el.dataset.id;
-    const slot = el.closest('[data-slot]').dataset.slot;
     if (S.build.has(id)) {
       S.build.delete(id);
       el.classList.remove('sel');
       return;
-    }
-    if (slot !== 'side') {
-      el.parentElement.querySelectorAll('.tile.sel').forEach((t) => { t.classList.remove('sel'); S.build.delete(t.dataset.id); });
     }
     S.build.add(id);
     el.classList.add('sel');

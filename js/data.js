@@ -5,7 +5,7 @@ export const SLOTS = {
   top: { order: 2, label: 'Viršus' },
   onepiece: { order: 3, label: 'Suknelė' },
   bottom: { order: 4, label: 'Apačia' },
-  legwear: { order: 5, label: 'Kojinės' },
+  legwear: { order: 5, label: 'Kojinės ir pėdkelnės' },
   shoes: { order: 6, label: 'Batai' },
   side: { order: 7, label: 'Aksesuarai' },
 };
