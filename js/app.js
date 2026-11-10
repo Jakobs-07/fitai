@@ -215,7 +215,65 @@ function chatHTML(o) {
       <input class="input" id="chatInput" autocomplete="off" placeholder="Pvz. pakeisk batus į baltus…" ${busy ? 'disabled' : ''}>
       <button class="btn primary sm" type="submit" ${busy ? 'disabled' : ''}>Siųsti</button>
     </form>
+    <button class="btn sm ghost gpt-btn" data-act="ask-gpt" data-id="${o.id}">Klausti ChatGPT · nemokamai ↗</button>
   </div>`;
+}
+
+// ---- „Klausti ChatGPT“: tekstas + fito paveikslėlis per iPhone „Bendrinti“ ----
+function chatgptText(o, question) {
+  const w = S.weather;
+  const line = (it) => {
+    const c = catById(it.category);
+    return `- ${it.name || c?.label || 'rūbas'}${c ? ` (${c.label.toLowerCase()})` : ''}${it.colors?.length ? `, ${it.colors.join(', ')}` : ''}`;
+  };
+  const fit = orderedItems(o.itemIds);
+  const others = S.items.filter((i) => !o.itemIds.includes(i.id));
+  let t = 'Tu esi mano asmeninė stilistė. Atsakyk lietuviškai.\n\n';
+  t += `Šiandienos fitas („${o.title || 'mano fitas'}“), rūbai yra pridėtame paveikslėlyje:\n${fit.map(line).join('\n')}\n`;
+  if (w) t += `\nOrai: ${w.text}, ${w.temp}°C (jaučiasi ${w.feels}°C), dieną ${w.min}…${w.max}°C, lietaus tikimybė ${w.rain ?? 0}%.\n`;
+  if (S.profile.about) t += `\nMano stilius: ${S.profile.about}\n`;
+  if (S.profile.learned.length) t += `\nKą stilistė jau žino apie mano skonį:\n${S.profile.learned.map((l) => `- ${l}`).join('\n')}\n`;
+  if (others.length) t += `\nKiti mano spintos rūbai, iš kurių gali siūlyti pakeitimus:\n${others.slice(0, 120).map(line).join('\n')}\n`;
+  t += `\n${question || 'Ką manai apie šį fitą? Ką patobulintum ir kuo pakeistum iš mano spintos?'}`;
+  return t;
+}
+
+async function fitShareImage(o) {
+  const items = orderedItems(o.itemIds);
+  const W = 1080, H = 1350, pad = 50;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const x = c.getContext('2d');
+  x.fillStyle = '#F8F6F2';
+  x.fillRect(0, 0, W, H);
+  const cols = items.length > 4 ? 3 : 2;
+  const rows = Math.ceil(items.length / cols) || 1;
+  const cw = (W - pad * 2) / cols, ch = (H - pad * 2) / rows;
+  for (let i = 0; i < items.length; i++) {
+    const bm = await createImageBitmap(items[i].image);
+    const sc = Math.min((cw - 30) / bm.width, (ch - 30) / bm.height);
+    const w = bm.width * sc, h = bm.height * sc;
+    const cx = pad + (i % cols) * cw + (cw - w) / 2, cy = pad + Math.floor(i / cols) * ch + (ch - h) / 2;
+    x.drawImage(bm, cx, cy, w, h);
+  }
+  return new Promise((r) => c.toBlob((b) => r(new File([b], 'fitas.jpg', { type: 'image/jpeg' })), 'image/jpeg', 0.88));
+}
+
+async function askChatGPT(o) {
+  const question = ($('#chatInput')?.value || '').trim();
+  const text = chatgptText(o, question);
+  try { await navigator.clipboard.writeText(text); } catch (_) {}
+  try {
+    const file = await fitShareImage(o);
+    if (navigator.canShare && navigator.canShare({ files: [file], text })) {
+      await navigator.share({ files: [file], text });
+      return;
+    }
+  } catch (e) {
+    if (e.name === 'AbortError') return; // pati uždarė bendrinimo langą
+  }
+  toast('Tekstas nukopijuotas – ChatGPT laukelyje palaikyk ir spausk „Įklijuoti“', 6000);
+  setTimeout(() => window.open('https://chatgpt.com/', '_blank'), 600);
 }
 
 // ---- Trintukas: rankinis fono valymas ----
@@ -1307,6 +1365,10 @@ const actions = {
     await afterOutfitEdit(o, 'Rūbas pridėtas');
   },
   noop() {},
+  'ask-gpt'(el) {
+    const o = outfitById(el.dataset.id);
+    if (o) askChatGPT(o);
+  },
   async 'ai-enhance'(el) {
     const it = itemById($('#itemForm').dataset.id);
     if (!it) return;
