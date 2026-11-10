@@ -36,12 +36,61 @@ async function tx(store, mode, fn) {
   });
 }
 
+// iPhone Safari kartais sugadina nuotrauką (Blob), kai ji iš naujo įrašoma į IndexedDB.
+// Todėl nuotraukas saugome kaip baitus (ArrayBuffer), o nuskaitę paverčiame atgal į Blob.
+async function pack(v) {
+  if (v instanceof Blob) {
+    try {
+      return { __bin: await v.arrayBuffer(), type: v.type };
+    } catch (e) {
+      console.warn('Nuotrauka neperskaitoma', e);
+      return { __broken: true };
+    }
+  }
+  if (Array.isArray(v)) return Promise.all(v.map(pack));
+  if (v && typeof v === 'object' && !(v instanceof ArrayBuffer) && !ArrayBuffer.isView(v)) {
+    const o = {};
+    for (const [k, x] of Object.entries(v)) o[k] = await pack(x);
+    return o;
+  }
+  return v;
+}
+function unpack(v) {
+  if (!v || typeof v !== 'object' || v instanceof Blob || v instanceof ArrayBuffer || ArrayBuffer.isView(v)) return v;
+  if (v.__bin instanceof ArrayBuffer) return new Blob([v.__bin], { type: v.type || '' });
+  if (v.__broken) return null;
+  if (Array.isArray(v)) return v.map(unpack);
+  const o = {};
+  for (const [k, x] of Object.entries(v)) o[k] = unpack(x);
+  return o;
+}
+
 export const db = {
-  all: (store) => tx(store, 'readonly', (s) => s.getAll()),
-  get: (store, id) => tx(store, 'readonly', (s) => s.get(id)),
-  put: (store, obj) => tx(store, 'readwrite', (s) => s.put(obj)),
+  all: async (store) => (await tx(store, 'readonly', (s) => s.getAll())).map(unpack),
+  get: async (store, id) => unpack(await tx(store, 'readonly', (s) => s.get(id))),
+  put: async (store, obj) => {
+    const packed = await pack(obj); // būtinai prieš transakciją – ji neturi laukti
+    packed.__packed = true;
+    return tx(store, 'readwrite', (s) => s.put(packed));
+  },
   del: (store, id) => tx(store, 'readwrite', (s) => s.delete(id)),
 };
+
+// Seni įrašai (su Blob) perrašomi nauju formatu. Grąžina, kiek nuotraukų nepavyko perskaityti.
+export async function migrateBlobs() {
+  let broken = 0;
+  for (const store of ['items', 'outfits', 'kv']) {
+    const raw = await tx(store, 'readonly', (s) => s.getAll());
+    for (const rec of raw) {
+      if (rec.__packed) continue;
+      const packed = await pack(rec);
+      broken += JSON.stringify(packed, (k, v) => (v instanceof ArrayBuffer ? 0 : v)).split('"__broken"').length - 1;
+      packed.__packed = true;
+      await tx(store, 'readwrite', (s) => s.put(packed));
+    }
+  }
+  return broken;
+}
 
 export async function getSetting(key, fallback = null) {
   const row = await db.get('kv', key);

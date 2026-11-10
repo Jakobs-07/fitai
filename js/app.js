@@ -1,4 +1,4 @@
-import { db, getSetting, setSetting, uid, requestPersist, exportAll, importAll } from './db.js';
+import { db, getSetting, setSetting, uid, requestPersist, exportAll, importAll, migrateBlobs } from './db.js';
 import { DEFAULT_CATEGORIES, GROUPS, SLOTS, SEASONS, OCCASIONS, VIBE_IDEAS } from './data.js';
 import { resize, removeBackground, blobURL, transformImage, trimTransparent, autoEnhance } from './images.js';
 import { tagItem, styleOutfit, renderOutfit, chatAboutOutfit, enhanceItemPhoto, hasKey, testKey, modelsInUse } from './ai.js';
@@ -87,7 +87,8 @@ const loadingHTML = (text) => `<div class="loading"><span class="serif">${text}<
 
 function tileHTML(it, extra = '', act = 'item', selected = false) {
   const c = catById(it.category);
-  return `<button class="tile ${selected ? 'sel' : ''}" data-act="${act}" data-id="${it.id}"><div class="ph-wrap"><img src="${blobURL(it.image)}" alt="" loading="lazy"></div>
+  const pic = it.image ? `<img src="${blobURL(it.image)}" alt="" loading="lazy">` : `<span class="label lost">Nuotrauka dingo – įkelk iš naujo</span>`;
+  return `<button class="tile ${selected ? 'sel' : ''}" data-act="${act}" data-id="${it.id}"><div class="ph-wrap">${pic}</div>
     <div class="cap">${esc(it.name || (c ? c.label : ''))}</div>${extra}</button>`;
 }
 
@@ -110,7 +111,7 @@ const sheetTop = (title) => `<div class="sheet-top"><h2>${title}</h2><button cla
 
 // ================= Outfito vaizdas =================
 function orderedItems(itemIds) {
-  return (itemIds || []).map(itemById).filter(Boolean).sort((a, b) => SLOTS[slotOf(a)].order - SLOTS[slotOf(b)].order);
+  return (itemIds || []).map(itemById).filter((i) => i && i.image).sort((a, b) => SLOTS[slotOf(a)].order - SLOTS[slotOf(b)].order);
 }
 
 function flatlayHTML(itemIds, mini = false, stamp = '', opts = {}) {
@@ -766,6 +767,29 @@ fileInput.addEventListener('change', async () => {
     toast('Nuotrauka išsaugota');
     return rerender();
   }
+  if (fileTarget.startsWith('replace:')) {
+    const it = itemById(fileTarget.slice(8));
+    fileTarget = 'items';
+    if (!it) return;
+    toast('Ruošiama nuotrauka…', 60000);
+    try {
+      const original = await resize(files[0], 1400, 'image/jpeg', 0.85);
+      let image = original, cutout = false;
+      if (await getSetting('bgRemoval', true)) {
+        try { image = await resize(await removeBackground(original), 900, 'image/png'); cutout = true; } catch (e) { console.warn('bg', e); }
+      }
+      if (await getSetting('autoEnhance', true)) { try { image = await autoEnhance(image); } catch (_) {} }
+      Object.assign(it, { image, original, cutout });
+      delete it.prevImage;
+      await db.put('items', it);
+      toast('Nuotrauka atnaujinta');
+      openItem(it.id);
+      rerender();
+    } catch (e) {
+      toast('Nepavyko: ' + e.message);
+    }
+    return;
+  }
   if (fileTarget === 'import') {
     try {
       await importAll(files[0]);
@@ -883,13 +907,16 @@ function openItem(id, fresh = false) {
   openSheet(`
     ${sheetTop(fresh ? 'Naujas rūbas' : 'Rūbas')}
     <div class="stack" id="itemForm" data-id="${id}">
-      <div class="item-hero"><img id="itemImg" src="${blobURL(it.image)}" alt=""></div>
-      <div class="img-tools">
+      ${it.image ? `<div class="item-hero"><img id="itemImg" src="${blobURL(it.image)}" alt=""></div>`
+        : `<div class="item-hero stack" style="gap:10px"><span class="serif" style="font-size:20px">Nuotrauka dingo</span>
+            <span class="small muted center">Telefonas jos nebegali perskaityti. Įkelk šio rūbo nuotrauką iš naujo – visa kita informacija liks.</span>
+            <button class="btn primary sm" data-act="replace-photo" data-id="${it.id}">Įkelti naują nuotrauką</button></div>`}
+      ${it.image ? `<div class="img-tools">
         <button data-act="img-op" data-op="rotL" aria-label="Pasukti į kairę"><svg viewBox="0 0 24 24"><path d="M4 9.5A8 8 0 1 1 5.6 16"/><path d="M4 4.5v5h5"/></svg><span>Pasukti</span></button>
         <button data-act="img-op" data-op="rotR" aria-label="Pasukti į dešinę"><svg viewBox="0 0 24 24"><path d="M20 9.5A8 8 0 1 0 18.4 16"/><path d="M20 4.5v5h-5"/></svg><span>Pasukti</span></button>
         <button data-act="img-op" data-op="flipH" aria-label="Apversti"><svg viewBox="0 0 24 24"><path d="M12 3v18"/><path d="M9 7 3.5 17H9z"/><path d="M15 7l5.5 10H15z"/></svg><span>Apversti</span></button>
         <button data-act="erase" aria-label="Trinti foną"><svg viewBox="0 0 24 24"><path d="M14.5 4.5 20 10 11 19H6.5L4 16.5z"/><path d="M9.5 9.5 15 15"/><path d="M11 19h9"/></svg><span>Trinti</span></button>
-      </div>
+      </div>` : ''}
       ${fresh ? `<div class="label center">${S.keyOk ? 'DI užpildė informaciją – pataisyk, jei reikia' : 'Užpildyk informaciją (su DI raktu tai vyksta automatiškai)'}</div>` : ''}
       <div class="field"><label>Pavadinimas</label><input class="input" name="name" value="${esc(it.name)}" placeholder="Balta lininė palaidinė"></div>
       <div class="field"><label>Kategorija</label><select class="input" name="category">${categorySelect(it.category)}</select></div>
@@ -1365,6 +1392,11 @@ const actions = {
     await afterOutfitEdit(o, 'Rūbas pridėtas');
   },
   noop() {},
+  'replace-photo'(el) {
+    fileTarget = 'replace:' + el.dataset.id;
+    fileInput.multiple = false;
+    fileInput.click();
+  },
   'ask-gpt'(el) {
     const o = outfitById(el.dataset.id);
     if (o) askChatGPT(o);
@@ -1537,7 +1569,21 @@ $('#weatherPill').addEventListener('click', () => (location.hash = '#fitas'));
 
 // ================= Paleidimas =================
 async function loadAll() {
+  try {
+    const broken = await migrateBlobs();
+    if (broken) console.warn('Sugadintų nuotraukų:', broken);
+  } catch (e) {
+    console.warn('migrate', e);
+  }
   S.items = await db.all('items');
+  // sugadintą nuotrauką bandom pakeisti originalia
+  const ok = (b) => b instanceof Blob && b.size > 0;
+  for (const it of S.items) {
+    if (ok(it.image)) continue;
+    it.image = ok(it.original) ? it.original : null;
+    if (it.image) it.cutout = false;
+    await db.put('items', it);
+  }
   S.outfits = await db.all('outfits');
   S.worn = await db.all('worn');
   const custom = (await getSetting('customCategories')) || [];
