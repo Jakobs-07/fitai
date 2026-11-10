@@ -111,12 +111,13 @@ function orderedItems(itemIds) {
   return (itemIds || []).map(itemById).filter(Boolean).sort((a, b) => SLOTS[slotOf(a)].order - SLOTS[slotOf(b)].order);
 }
 
-function flatlayHTML(itemIds, mini = false, stamp = '') {
+function flatlayHTML(itemIds, mini = false, stamp = '', opts = {}) {
   const items = orderedItems(itemIds);
   if (!items.length) return `<div class="flatlay ${mini ? 'mini' : ''}"><div class="fl-main" style="justify-content:center"><span class="label">Rūbai ištrinti</span></div></div>`;
   const by = {};
   for (const it of items) (by[slotOf(it)] = by[slotOf(it)] || []).push(it);
-  const img = (it, slot) => `<div class="fl-item ${slot}" ${mini ? '' : `data-act="item" data-id="${it.id}"`}><img src="${blobURL(it.image)}" alt="${esc(it.name)}" loading="lazy"></div>`;
+  const itemAttr = (it) => (mini || opts.static ? '' : opts.oid ? `data-act="ofit-item" data-o="${opts.oid}" data-id="${it.id}"` : `data-act="item" data-id="${it.id}"`);
+  const img = (it, slot) => `<div class="fl-item ${slot}" ${itemAttr(it)}><img src="${blobURL(it.image)}" alt="${esc(it.name)}" loading="lazy"></div>`;
   const row = (arr, slot) => (arr && arr.length ? (arr.length > 1 ? `<div class="fl-row">${arr.map((i) => img(i, slot)).join('')}</div>` : img(arr[0], slot)) : '');
   let main = row(by.head, 'head');
   if (by.outer && by.top) {
@@ -126,15 +127,16 @@ function flatlayHTML(itemIds, mini = false, stamp = '') {
   }
   main += row(by.onepiece, 'onepiece') + row(by.bottom, 'bottom') + row(by.legwear, 'legwear') + row(by.shoes, 'shoes');
   const side = by.side ? `<div class="fl-side">${by.side.map((i) => img(i, 'side')).join('')}</div>` : '';
-  return `<div class="flatlay ${mini ? 'mini' : ''}">${stamp ? `<span class="label fl-stamp">${stamp}</span>` : ''}<div class="fl-main">${main}</div>${side}</div>`;
+  const zoom = opts.oid ? `data-act="zoom" data-o="${opts.oid}"` : '';
+  return `<div class="flatlay ${mini ? 'mini' : ''} ${opts.big ? 'big' : ''}" ${zoom}>${stamp ? `<span class="label fl-stamp">${stamp}</span>` : ''}<div class="fl-main">${main}</div>${side}</div>`;
 }
 
-function creditsHTML(itemIds) {
-  const items = orderedItems(itemIds);
+function creditsHTML(o) {
+  const items = orderedItems(o.itemIds);
   return `<ul class="credits">${items.map((it, i) => {
     const c = catById(it.category);
-    return `<li data-act="item" data-id="${it.id}"><span class="n">${pad2(i + 1)}</span><span>${esc(it.name || (c ? c.label : 'Rūbas'))}</span><span class="c">${esc(c ? c.label : '')}</span></li>`;
-  }).join('')}</ul>`;
+    return `<li data-act="ofit-item" data-o="${o.id}" data-id="${it.id}"><span class="n">${pad2(i + 1)}</span><span>${esc(it.name || (c ? c.label : 'Rūbas'))}</span><span class="c">${esc(c ? c.label : '')} ›</span></li>`;
+  }).join('')}<li class="add-row" data-act="ofit-add" data-o="${o.id}"><span class="n">+</span><span>Pridėti rūbą</span></li></ul>`;
 }
 
 function outfitCardHTML(o) {
@@ -143,7 +145,7 @@ function outfitCardHTML(o) {
   const busy = S.rendering && S.rendering.id === o.id;
   let visual;
   if (tab === 'flat') {
-    visual = flatlayHTML(o.itemIds, false, o.source === 'ai' ? 'Stilistės parinkta' : 'Tavo derinys') + creditsHTML(o.itemIds);
+    visual = flatlayHTML(o.itemIds, false, o.source === 'ai' ? 'Stilistės parinkta' : 'Tavo derinys', { oid: o.id }) + `<div class="label zoom-hint">Paliesk foną – padidinsi · paliesk rūbą – pakeisi</div>` + creditsHTML(o);
   } else {
     const blob = o.renders && o.renders[tab];
     if (busy && S.rendering.mode === tab) {
@@ -203,6 +205,15 @@ function chatHTML(o) {
       <button class="btn primary sm" type="submit" ${busy ? 'disabled' : ''}>Siųsti</button>
     </form>
   </div>`;
+}
+
+async function afterOutfitEdit(o, msg) {
+  o.renders = {};
+  o.edited = true;
+  await saveOutfit(o);
+  closeSheet();
+  toast(msg);
+  rerender();
 }
 
 async function sendChat(id, text) {
@@ -268,7 +279,8 @@ function viewFitas() {
     html += `<div class="weather-box panel-wine">
       <div><div class="label" style="margin-bottom:10px">${esc(w.place)} · šiandien</div><div class="t">${w.temp}°</div></div>
       <div style="text-align:right"><div class="serif" style="font-size:20px">${esc(w.text)}</div>
-        <div class="label" style="margin-top:6px">${w.min}° / ${w.max}° · Lietus ${w.rain ?? 0}%</div></div>
+        <div class="label" style="margin-top:6px">Jaučiasi ${w.feels}° · vėjas ${w.wind} km/h</div>
+        <div class="label" style="margin-top:2px">Dieną ${w.min}°…${w.max}° · lietus ${w.rain ?? 0}%</div></div>
     </div>`;
   }
 
@@ -1060,6 +1072,70 @@ const actions = {
     fileInput.multiple = false;
     fileInput.click();
   },
+  zoom(el, e) {
+    if (e.target.closest('.fl-item')) return;
+    const o = outfitById(el.dataset.o);
+    if (!o) return;
+    const lb = document.createElement('div');
+    lb.className = 'lightbox';
+    lb.innerHTML = `<div class="lb-top"><span class="label">Nº ${lookNo(o)} · ${esc(o.title || '')}</span><button class="x" data-act="lb-close">Uždaryti</button></div>
+      ${flatlayHTML(o.itemIds, false, '', { big: true, static: true })}`;
+    lb.addEventListener('click', (ev) => { if (!ev.target.closest('.lb-top') || ev.target.closest('[data-act=lb-close]')) lb.remove(); });
+    document.body.appendChild(lb);
+  },
+  'lb-close'() {
+    document.querySelector('.lightbox')?.remove();
+  },
+  'ofit-item'(el) {
+    const o = outfitById(el.dataset.o);
+    const it = itemById(el.dataset.id);
+    if (!o || !it) return;
+    const slot = slotOf(it);
+    const alts = S.items.filter((i) => slotOf(i) === slot && i.id !== it.id && !o.itemIds.includes(i.id));
+    openSheet(`${sheetTop('Keisti rūbą')}
+      <div class="stack">
+        <div class="row" style="gap:14px">
+          <div style="width:84px;flex:none">${tileHTML(it, '', 'noop')}</div>
+          <div class="stack" style="gap:8px;flex:1">
+            <b>${esc(it.name || catById(it.category)?.label || 'Rūbas')}</b>
+            <button class="btn sm danger" data-act="ofit-remove" data-o="${o.id}" data-id="${it.id}">Išimti iš fito</button>
+            <button class="btn sm ghost" style="align-self:flex-start;padding-left:0" data-act="item" data-id="${it.id}">Rūbo kortelė →</button>
+          </div>
+        </div>
+        <div class="section-head"><h3>Pakeisti į</h3><span class="label">${SLOTS[slot].label}</span></div>
+        ${alts.length ? `<div class="grid">${alts.map((a) => tileHTML(a, '', 'ofit-swap').replace('data-act="ofit-swap"', `data-act="ofit-swap" data-o="${o.id}" data-from="${it.id}"`)).join('')}</div>`
+          : `<div class="label center">Spintoje daugiau rūbų šiai vietai nėra</div>`}
+      </div>`);
+  },
+  async 'ofit-swap'(el) {
+    const o = outfitById(el.dataset.o);
+    o.itemIds = o.itemIds.map((id) => (id === el.dataset.from ? el.dataset.id : id));
+    await afterOutfitEdit(o, 'Rūbas pakeistas');
+  },
+  async 'ofit-remove'(el) {
+    const o = outfitById(el.dataset.o);
+    if (o.itemIds.length <= 1) return toast('Fite turi likti bent vienas rūbas');
+    o.itemIds = o.itemIds.filter((id) => id !== el.dataset.id);
+    await afterOutfitEdit(o, 'Rūbas išimtas');
+  },
+  'ofit-add'(el) {
+    const o = outfitById(el.dataset.o);
+    const slots = Object.entries(SLOTS).sort((a, b) => a[1].order - b[1].order);
+    let rows = '';
+    for (const [slot, info] of slots) {
+      const its = S.items.filter((i) => slotOf(i) === slot && !o.itemIds.includes(i.id));
+      if (!its.length) continue;
+      rows += `<div class="field"><label>${info.label}</label><div class="picker-row">
+        ${its.map((it) => tileHTML(it, '', 'ofit-addpick').replace('data-act="ofit-addpick"', `data-act="ofit-addpick" data-o="${o.id}"`)).join('')}</div></div>`;
+    }
+    openSheet(`${sheetTop('Pridėti rūbą')}<div class="stack">${rows || '<div class="label center">Visi rūbai jau šiame fite</div>'}</div>`);
+  },
+  async 'ofit-addpick'(el) {
+    const o = outfitById(el.dataset.o);
+    if (!o.itemIds.includes(el.dataset.id)) o.itemIds.push(el.dataset.id);
+    await afterOutfitEdit(o, 'Rūbas pridėtas');
+  },
+  noop() {},
   'chat-idea'(el) {
     sendChat(el.dataset.id, el.dataset.v);
   },

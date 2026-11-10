@@ -176,6 +176,26 @@ textarea.input { resize: none; min-height: 76px; line-height: 1.35; font-size: 1
 .flatlay.mini .fl-side .fl-item img { max-height: 30px; }
 .fl-stamp { position: absolute; left: 12px; top: 10px; }
 
+.flatlay[data-act=zoom] { cursor: zoom-in; }
+.zoom-hint { margin: 8px 18px 0; font-size: 9.5px; }
+.credits li { cursor: pointer; }
+.credits li.add-row { color: var(--wine); border-bottom: 0; }
+.credits li.add-row .n { color: var(--wine); font-size: 14px; }
+.lightbox {
+  position: fixed; inset: 0; z-index: 80; background: var(--paper) var(--grain); display: flex; flex-direction: column;
+  padding: calc(env(safe-area-inset-top) + 12px) 12px calc(env(safe-area-inset-bottom) + 12px); animation: fade .2s;
+}
+.lb-top { display: flex; justify-content: space-between; align-items: center; padding: 0 4px 10px; }
+.lightbox .flatlay { flex: 1; margin: 0; min-height: 0; justify-content: center; align-items: center; }
+.flatlay.big .fl-main { justify-content: center; gap: 6px; }
+.flatlay.big .fl-item.head img { max-height: 9dvh; }
+.flatlay.big .fl-item.outer img, .flatlay.big .fl-item.top img { max-height: 28dvh; }
+.flatlay.big .fl-row .fl-item img { max-height: 26dvh; }
+.flatlay.big .fl-item.onepiece img { max-height: 48dvh; }
+.flatlay.big .fl-item.bottom img { max-height: 32dvh; }
+.flatlay.big .fl-item.legwear img { max-height: 13dvh; }
+.flatlay.big .fl-item.shoes img { max-height: 12dvh; }
+.flatlay.big .fl-side .fl-item img { max-height: 14dvh; }
 .credits { list-style: none; margin: 14px 18px 0; padding: 0; }
 .credits li { display: flex; gap: 10px; align-items: baseline; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
 .credits li .n { font-family: var(--mono); font-size: 10px; color: var(--muted); width: 22px; }
