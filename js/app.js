@@ -1,6 +1,6 @@
 import { db, getSetting, setSetting, uid, requestPersist, exportAll, importAll } from './db.js';
 import { DEFAULT_CATEGORIES, GROUPS, SLOTS, SEASONS, OCCASIONS, VIBE_IDEAS } from './data.js';
-import { resize, removeBackground, blobURL, transformImage } from './images.js';
+import { resize, removeBackground, blobURL, transformImage, trimTransparent } from './images.js';
 import { tagItem, styleOutfit, renderOutfit, chatAboutOutfit, hasKey, testKey, modelsInUse } from './ai.js';
 import { getWeather, weatherForAI, findCity } from './weather.js';
 
@@ -119,7 +119,7 @@ function flatlayHTML(itemIds, mini = false, stamp = '', opts = {}) {
   const by = {};
   for (const it of items) (by[slotOf(it)] = by[slotOf(it)] || []).push(it);
   const itemAttr = (it) => (mini || opts.static ? '' : opts.oid ? `data-act="ofit-item" data-o="${opts.oid}" data-id="${it.id}"` : `data-act="item" data-id="${it.id}"`);
-  const img = (it, slot) => `<div class="fl-item ${slot}" ${itemAttr(it)}><img src="${blobURL(it.image)}" alt="${esc(it.name)}" loading="lazy"></div>`;
+  const img = (it, slot) => `<div class="fl-item ${slot} cat-${it.category}" ${itemAttr(it)}><img src="${blobURL(it.image)}" alt="${esc(it.name)}" loading="lazy"></div>`;
   const row = (arr, slot) => (arr && arr.length ? (arr.length > 1 ? `<div class="fl-row">${arr.map((i) => img(i, slot)).join('')}</div>` : img(arr[0], slot)) : '');
   let main = row(by.head, 'head');
   if (by.outer && by.top) {
@@ -209,6 +209,92 @@ function chatHTML(o) {
       <button class="btn primary sm" type="submit" ${busy ? 'disabled' : ''}>Siųsti</button>
     </form>
   </div>`;
+}
+
+// ---- Trintukas: rankinis fono valymas ----
+async function openEraser(id) {
+  const it = itemById(id);
+  if (!it) return;
+  const bmp = await createImageBitmap(it.image);
+  const ed = document.createElement('div');
+  ed.className = 'editor';
+  ed.innerHTML = `
+    <div class="lb-top"><span class="label">Trinti foną</span><button class="x" data-ed="cancel">Atšaukti</button></div>
+    <div class="ed-stage"><canvas></canvas></div>
+    <div class="ed-tools">
+      <div class="label center">Braukyk pirštu per tai, ką nori ištrinti</div>
+      <label class="ed-size"><span class="label">Teptukas</span><input type="range" min="8" max="90" value="34" id="edSize"></label>
+      <div class="row">
+        <button class="btn sm" data-ed="undo">Atgal</button>
+        <button class="btn sm" data-ed="reset">Iš naujo</button>
+        <button class="btn sm primary" style="flex:1" data-ed="save">Išsaugoti</button>
+      </div>
+    </div>`;
+  document.body.appendChild(ed);
+  const cv = ed.querySelector('canvas');
+  cv.width = bmp.width;
+  cv.height = bmp.height;
+  const ctx = cv.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(bmp, 0, 0);
+  const initial = ctx.getImageData(0, 0, cv.width, cv.height);
+  const undo = [];
+  let drawing = false;
+  let last = null;
+  const pos = (e) => {
+    const r = cv.getBoundingClientRect();
+    return { x: ((e.clientX - r.left) * cv.width) / r.width, y: ((e.clientY - r.top) * cv.height) / r.height, k: cv.width / r.width };
+  };
+  const stroke = (a, b) => {
+    ctx.save();
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = +ed.querySelector('#edSize').value * a.k;
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+    ctx.restore();
+  };
+  cv.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    cv.setPointerCapture(e.pointerId);
+    undo.push(ctx.getImageData(0, 0, cv.width, cv.height));
+    if (undo.length > 15) undo.shift();
+    drawing = true;
+    last = pos(e);
+    stroke(last, last);
+  });
+  cv.addEventListener('pointermove', (e) => {
+    if (!drawing) return;
+    const p = pos(e);
+    stroke(last, p);
+    last = p;
+  });
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach((t) => cv.addEventListener(t, () => (drawing = false)));
+  ed.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-ed]');
+    if (!b) return;
+    const a = b.dataset.ed;
+    if (a === 'cancel') ed.remove();
+    if (a === 'undo' && undo.length) ctx.putImageData(undo.pop(), 0, 0);
+    if (a === 'reset') {
+      undo.push(ctx.getImageData(0, 0, cv.width, cv.height));
+      ctx.putImageData(initial, 0, 0);
+    }
+    if (a === 'save') {
+      b.disabled = true;
+      b.textContent = 'Saugoma…';
+      const blob = await new Promise((r) => cv.toBlob(r, 'image/png'));
+      it.image = await trimTransparent(blob, 8);
+      it.cutout = true;
+      await db.put('items', it);
+      ed.remove();
+      openItem(it.id);
+      rerender();
+      toast('Išsaugota');
+    }
+  });
 }
 
 // ---- Stiliaus profilis: ką stilistė žino apie jos skonį ----
@@ -732,6 +818,7 @@ function openItem(id, fresh = false) {
         <button data-act="img-op" data-op="rotL" aria-label="Pasukti į kairę"><svg viewBox="0 0 24 24"><path d="M4 9.5A8 8 0 1 1 5.6 16"/><path d="M4 4.5v5h5"/></svg><span>Pasukti</span></button>
         <button data-act="img-op" data-op="rotR" aria-label="Pasukti į dešinę"><svg viewBox="0 0 24 24"><path d="M20 9.5A8 8 0 1 0 18.4 16"/><path d="M20 4.5v5h-5"/></svg><span>Pasukti</span></button>
         <button data-act="img-op" data-op="flipH" aria-label="Apversti"><svg viewBox="0 0 24 24"><path d="M12 3v18"/><path d="M9 7 3.5 17H9z"/><path d="M15 7l5.5 10H15z"/></svg><span>Apversti</span></button>
+        <button data-act="erase" aria-label="Trinti foną"><svg viewBox="0 0 24 24"><path d="M14.5 4.5 20 10 11 19H6.5L4 16.5z"/><path d="M9.5 9.5 15 15"/><path d="M11 19h9"/></svg><span>Trinti</span></button>
       </div>
       ${fresh ? `<div class="label center">${S.keyOk ? 'DI užpildė informaciją – pataisyk, jei reikia' : 'Užpildyk informaciją (su DI raktu tai vyksta automatiškai)'}</div>` : ''}
       <div class="field"><label>Pavadinimas</label><input class="input" name="name" value="${esc(it.name)}" placeholder="Balta lininė palaidinė"></div>
@@ -1193,6 +1280,10 @@ const actions = {
     await afterOutfitEdit(o, 'Rūbas pridėtas');
   },
   noop() {},
+  erase() {
+    const id = $('#itemForm')?.dataset.id;
+    if (id) openEraser(id);
+  },
   async 'save-about'() {
     S.profile.about = $('#styleAbout').value.trim();
     await saveProfile();
