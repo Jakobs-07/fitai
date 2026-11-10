@@ -1,5 +1,5 @@
 // Offline režimas: pirmiausia bandom tinklą (kad atnaujinimai atsirastų iškart), jei nėra interneto – imam iš atminties.
-const CACHE = 'fitai-v3';
+const CACHE = 'fitai-v4';
 const SHELL = ['./', 'index.html', 'css/app.css', 'js/app.js', 'js/db.js', 'js/data.js', 'js/ai.js', 'js/images.js', 'js/weather.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {
@@ -28,7 +28,8 @@ self.addEventListener('fetch', (e) => {
     }));
     return;
   }
-  e.respondWith(fetch(req).then((res) => {
+  // no-cache: visada pasitikrinam serveryje, kad visi programėlės failai būtų tos pačios versijos
+  e.respondWith(fetch(req.url, { cache: 'no-cache', credentials: 'same-origin' }).then((res) => {
     if (res.ok) caches.open(CACHE).then((c) => c.put(req, res.clone()));
     return res;
   }).catch(() => caches.match(req, { ignoreSearch: true }).then((r) => r || caches.match('index.html'))));
