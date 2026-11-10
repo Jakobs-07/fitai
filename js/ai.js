@@ -186,7 +186,7 @@ export async function styleOutfit({ vibe, items, categories, weather, wearStats,
 }
 
 // ---- Vaizdas "ant manekeno" arba "ant manęs" ----
-export async function renderOutfit({ items, categories, mode, selfPhoto }) {
+export async function renderOutfit({ items, categories, mode, selfPhoto, notes = '' }) {
   const catById = Object.fromEntries(categories.map((c) => [c.id, c]));
   const fd = new FormData();
   let idx = 1;
@@ -219,6 +219,12 @@ export async function renderOutfit({ items, categories, mode, selfPhoto }) {
       'Plain warm beige studio background, soft even lighting, centered, entire outfit including shoes visible.\n' +
       list.join('\n');
   }
+  const hasShoes = items.some((it) => catById[it.category]?.slot === 'shoes');
+  prompt +=
+    '\nSTRICT RULES: Use ONLY the garments shown in the provided item images. ' +
+    'Do NOT add any other clothing, shoes, socks, tights, bags, jewelry or accessories that are not in the images. ' +
+    (hasShoes ? '' : 'No shoes are provided, so show bare feet without any shoes or socks. ');
+  if (notes) prompt += `\nAdditional instructions from the client (follow them): ${notes}`;
   fd.append('prompt', prompt);
   fd.append('n', '1');
   const send = async (model, extras) => {
@@ -265,9 +271,15 @@ export async function chatAboutOutfit({ outfit, message, items, categories, weat
         STYLIST +
         'Dabar kalbiesi su klientė apie jau sudarytą fitą. Ji gali klausti, prašyti pakeitimų ar naujos idėjos. ' +
         'Jei prašo pakeisti – pakeisk tik tai, ko reikia, likusius rūbus palik. Jei tik klausia – atsakyk ir nieko nekeisk. ' +
-        'Atsakymas trumpas: 1–3 sakiniai. ' +
+        'Atsakymas trumpas: 1–3 sakiniai. Niekada neminėk techninių dalykų (id, itemIds, JSON, sąrašų) – kalbėk tik apie rūbus. ' +
+        'Programėlė moka generuoti fito vaizdą: "mannequin" (ant manekeno) arba "me" (ant jos pačios nuotraukos). ' +
+        'Jei ji prašo sukurti, pataisyti ar pergeneruoti vaizdą – nustatyk "render" ir NEDELSK, nepaklausk dar kartą. ' +
+        'Jei pageidauja kažko konkretaus vaizde (pvz. be batų, kita poza, kitas fonas) – įrašyk tai į "imageNotes" angliškai, trumpai; ' +
+        'šios pastabos galios ir kitiems to fito vaizdams. Tuščias "imageNotes" reiškia – palikti esamas pastabas. ' +
+        'Jei pasikeitė rūbai ir jau yra vaizdas, gali iškart nustatyti "render", kad vaizdas atsinaujintų. ' +
         'Atsakyk TIK JSON: {"reply": "tavo atsakymas", "changed": true/false, "itemIds": [visi fito rūbų id po pakeitimo], ' +
-        '"title": "pavadinimas (jei pasikeitė fitas)", "explanation": "2–3 sakiniai apie naują derinį (jei pasikeitė)", "tip": "patarimas (jei pasikeitė)"}. ' +
+        '"title": "pavadinimas (jei pasikeitė fitas)", "explanation": "2–3 sakiniai apie naują derinį (jei pasikeitė)", "tip": "patarimas (jei pasikeitė)", ' +
+        '"render": null | "mannequin" | "me", "imageNotes": "" }. ' +
         'Jei spintoje nėra to, ko ji prašo, pasakyk tai ir pasiūlyk artimiausią variantą.',
     },
     {
@@ -277,6 +289,8 @@ export async function chatAboutOutfit({ outfit, message, items, categories, weat
         orai: weather || 'nežinomi',
         pradinis_noras: outfit.vibe || '',
         dabartinis_fitas: { pavadinimas: outfit.title, itemIds: outfit.itemIds },
+        jau_sugeneruoti_vaizdai: Object.keys(outfit.renders || {}),
+        esamos_vaizdo_pastabos: outfit.imageNotes || '',
         spinta: wardrobeFor(items, categories, wearStats),
       }),
     },
@@ -287,6 +301,8 @@ export async function chatAboutOutfit({ outfit, message, items, categories, weat
   const valid = new Set(items.map((i) => i.id));
   out.itemIds = (out.itemIds || []).filter((id) => valid.has(id));
   if (!out.itemIds.length) out.changed = false;
+  if (!['mannequin', 'me'].includes(out.render)) out.render = null;
+  out.imageNotes = typeof out.imageNotes === 'string' ? out.imageNotes.trim() : '';
   if (!out.reply) out.reply = 'Atsiprašau, nesupratau. Pabandyk perrašyti kitaip.';
   return out;
 }

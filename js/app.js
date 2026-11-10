@@ -152,7 +152,9 @@ function outfitCardHTML(o) {
       visual = `<div class="render-box">${loadingHTML('Kuriamas vaizdas…')}<span class="label" style="margin-top:-20px">Iki minutės</span></div>`;
     } else if (blob) {
       visual = `<div class="render-box"><img src="${blobURL(blob)}" alt="Outfitas"></div>
-        <div class="row" style="margin:10px 18px 0"><button class="btn sm ghost" data-act="render" data-mode="${tab}">Sugeneruoti iš naujo</button></div>`;
+        <div class="row" style="margin:10px 18px 0;justify-content:space-between"><button class="btn sm ghost" style="padding-left:0;white-space:nowrap" data-act="render" data-mode="${tab}">Sugeneruoti iš naujo</button>
+        ${o.imageNotes ? `<button class="btn sm ghost" style="padding-right:0;white-space:nowrap" data-act="clear-notes" data-id="${o.id}">Išvalyti pastabas</button>` : ''}</div>
+        ${o.imageNotes ? `<div class="label" style="margin:2px 18px 0">Vaizdo pastabos: ${esc(o.imageNotes)}</div>` : ''}`;
     } else {
       const isMe = tab === 'me';
       const needSelf = isMe && !S.selfPhoto;
@@ -207,6 +209,25 @@ function chatHTML(o) {
   </div>`;
 }
 
+async function doRender(o, mode) {
+  if (!S.keyOk) return toast('Reikia API rakto (skiltis „Daugiau“)');
+  if (S.rendering) return toast('Vaizdas jau kuriamas – palauk');
+  if (mode === 'me' && !S.selfPhoto) return toast('Įkelk savo nuotrauką skiltyje „Daugiau“');
+  S.rendering = { id: o.id, mode };
+  S.renderTab = mode;
+  await rerender();
+  try {
+    const items = o.itemIds.map(itemById).filter(Boolean);
+    const blob = await renderOutfit({ items, categories: S.categories, mode, selfPhoto: S.selfPhoto, notes: o.imageNotes || '' });
+    o.renders = { ...(o.renders || {}), [mode]: blob };
+    await saveOutfit(o);
+  } catch (e) {
+    toast(e.message === 'NO_SELF' ? 'Įkelk savo nuotrauką skiltyje „Daugiau“' : 'Vaizdo sukurti nepavyko: ' + e.message, 6000);
+  }
+  S.rendering = null;
+  rerender();
+}
+
 async function afterOutfitEdit(o, msg) {
   o.renders = {};
   o.edited = true;
@@ -224,6 +245,7 @@ async function sendChat(id, text) {
   o.chat = [...(o.chat || []), { role: 'user', text, at: Date.now() }];
   await saveOutfit(o);
   S.chatting = o.id;
+  let renderAfter = null;
   await rerender();
   document.querySelector('.chat-form')?.scrollIntoView({ block: 'end', behavior: 'smooth' });
   try {
@@ -241,12 +263,20 @@ async function sendChat(id, text) {
       o.renders = {};
       S.renderTab = 'flat';
     }
+    if (r.imageNotes) o.imageNotes = r.imageNotes;
     await saveOutfit(o);
+    renderAfter = r.render;
   } catch (e) {
     toast(e.message === 'NO_KEY' ? 'Reikia API rakto' : 'Klaida: ' + e.message, 5000);
   }
   S.chatting = null;
   await rerender();
+  if (renderAfter) {
+    // stilistė paprašė sukurti vaizdą – rodom jį kortelės viršuje
+    await doRender(o, renderAfter);
+    document.querySelector('.outfit-card .seg')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    return;
+  }
   document.querySelector('.chat-form')?.scrollIntoView({ block: 'end' });
 }
 
@@ -767,21 +797,7 @@ const actions = {
   },
   async render(el) {
     const o = outfitById(S.currentId);
-    const mode = el.dataset.mode;
-    if (!o) return;
-    if (!S.keyOk) return toast('Reikia API rakto (skiltis „Daugiau“)');
-    S.rendering = { id: o.id, mode };
-    await rerender();
-    try {
-      const items = o.itemIds.map(itemById).filter(Boolean);
-      const blob = await renderOutfit({ items, categories: S.categories, mode, selfPhoto: S.selfPhoto });
-      o.renders = { ...(o.renders || {}), [mode]: blob };
-      await saveOutfit(o);
-    } catch (e) {
-      toast(e.message === 'NO_SELF' ? 'Įkelk savo nuotrauką skiltyje „Daugiau“' : 'Vaizdo sukurti nepavyko: ' + e.message, 6000);
-    }
-    S.rendering = null;
-    rerender();
+    if (o) doRender(o, el.dataset.mode);
   },
   async fav(el) {
     const o = outfitById(el.dataset.id);
@@ -1136,6 +1152,13 @@ const actions = {
     await afterOutfitEdit(o, 'Rūbas pridėtas');
   },
   noop() {},
+  async 'clear-notes'(el) {
+    const o = outfitById(el.dataset.id);
+    o.imageNotes = '';
+    await saveOutfit(o);
+    toast('Vaizdo pastabos išvalytos');
+    rerender();
+  },
   'chat-idea'(el) {
     sendChat(el.dataset.id, el.dataset.v);
   },
