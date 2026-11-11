@@ -30,6 +30,8 @@ const S = {
   chatting: null,
   profile: { about: '', learned: [] },
   me: {},
+  enhancing: new Set(),
+  pendingEnh: {},
   events: [],
   sel: new Set(),
 };
@@ -46,12 +48,22 @@ const slotOf = (it) => (catById(it.category) || { slot: 'top' }).slot;
 const isStandalone = () => window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 
 let toastTimer;
-function toast(msg, ms = 2800) {
+function toast(msg, ms = 2800, action = null) {
   const t = $('#toast');
-  t.textContent = msg;
+  t.innerHTML = `<span>${esc(msg)}</span>${action ? `<b class="t-act">${esc(action.label)} →</b>` : ''}`;
+  t.classList.toggle('has-act', !!action);
+  t.onclick = action ? () => { t.hidden = true; action.fn(); } : null;
   t.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (t.hidden = true), ms);
+  toastTimer = setTimeout(() => (t.hidden = true), action ? Math.max(ms, 7000) : ms);
+}
+// Švelnūs pasiekimai – vieną kartą
+async function milestone(key, msg) {
+  const seen = (await getSetting('milestones')) || {};
+  if (seen[key]) return;
+  seen[key] = Date.now();
+  await setSetting('milestones', seen);
+  setTimeout(() => toast(msg, 4500), 600);
 }
 
 function wearStats() {
@@ -192,6 +204,7 @@ function outfitCardHTML(o) {
     <div class="outfit-body">
       ${o.explanation ? `<div class="quote">„${esc(o.explanation)}“</div>` : ''}
       ${o.tip ? `<div class="tip"><span class="label">Stilistės patarimas</span>${esc(o.tip)}</div>` : ''}
+      ${o.gap ? `<div class="gap-note"><span class="label">Spintoje trūksta</span>${esc(o.gap)}</div>` : ''}
       <div class="actions">
         <button class="btn ${o.favorite ? 'primary' : ''}" data-act="fav" data-id="${o.id}">${o.favorite ? 'Mėgstamas ✓' : 'Į mėgstamus'}</button>
         <button class="btn ${worn ? 'dark' : ''}" data-act="wear" data-id="${o.id}" ${worn ? 'disabled' : ''}>${worn ? 'Vilki šiandien ✓' : 'Vilkėsiu šiandien'}</button>
@@ -203,7 +216,14 @@ function outfitCardHTML(o) {
   </div>`;
 }
 
-const CHAT_IDEAS = ['Kažką šiltesnio', 'Spalvingiau', 'Pakeisk batus', 'Kodėl būtent taip?'];
+const CHAT_IDEAS = [
+  ['Šilčiau', 'Padaryk šiltesnį variantą šiems orams'],
+  ['Elegantiškiau', 'Padaryk elegantiškesnį'],
+  ['Kasdieniškiau', 'Padaryk kasdieniškesnį ir patogesnį'],
+  ['Kiti batai', 'Pakeisk batus'],
+  ['Spalvingiau', 'Įnešk daugiau spalvos'],
+  ['Kodėl taip?', 'Kodėl būtent toks derinys?'],
+];
 
 function chatHTML(o) {
   const msgs = o.chat || [];
@@ -214,7 +234,7 @@ function chatHTML(o) {
       ? `<div class="msg me">${esc(m.text)}</div>`
       : `<div class="msg her">${esc(m.text)}${m.changed ? '<span class="label msg-note">Fitas atnaujintas</span>' : ''}</div>`).join('')}
     ${busy ? `<div class="msg her typing"><div class="loader"></div></div>` : ''}
-    ${!msgs.length && !busy ? `<div class="chips wrap">${CHAT_IDEAS.map((t) => `<button class="chip" data-act="chat-idea" data-id="${o.id}" data-v="${esc(t)}">${t}</button>`).join('')}</div>` : ''}
+    ${!busy ? `<div class="chips">${CHAT_IDEAS.filter(([l]) => l !== 'Šilčiau' || (S.weather && S.weather.temp < 14)).map(([l, t]) => `<button class="chip" data-act="chat-idea" data-id="${o.id}" data-v="${esc(t)}">${l}</button>`).join('')}</div>` : ''}
     <form class="chat-form" data-id="${o.id}">
       <input class="input" id="chatInput" autocomplete="off" placeholder="Pvz. pakeisk batus į baltus…" ${busy ? 'disabled' : ''}>
       <button class="btn primary sm" type="submit" ${busy ? 'disabled' : ''}>Siųsti</button>
@@ -308,6 +328,106 @@ async function openEraser(id) {
   });
 }
 
+// ---- Pagražinimo apsauga: palyginimas ir spalvos pokyčio tikrinimas ----
+async function avgColor(blob) {
+  const bm = await createImageBitmap(blob);
+  const c = document.createElement('canvas');
+  c.width = 48; c.height = 48;
+  const x = c.getContext('2d', { willReadFrequently: true });
+  x.drawImage(bm, 0, 0, 48, 48);
+  const d = x.getImageData(0, 0, 48, 48).data;
+  let r = 0, g = 0, b = 0, n = 0;
+  for (let i = 0; i < d.length; i += 4) if (d[i + 3] > 180) { r += d[i]; g += d[i + 1]; b += d[i + 2]; n++; }
+  return n ? [r / n, g / n, b / n] : [0, 0, 0];
+}
+async function colorShift(a, b) {
+  try {
+    const [x, y] = await Promise.all([avgColor(a), avgColor(b)]);
+    // atspalvio pokytis svarbesnis nei šviesumo: lyginam spalvas be bendro šviesumo
+    const lx = (x[0] + x[1] + x[2]) / 3 || 1, ly = (y[0] + y[1] + y[2]) / 3 || 1;
+    const chroma = Math.hypot(...x.map((v, i) => (v - lx) - (y[i] - ly)));
+    return chroma * 1.6 + Math.abs(lx - ly) * 0.3;
+  } catch (_) { return 0; }
+}
+
+function openCompare(id) {
+  const it = itemById(id);
+  const p = S.pendingEnh[id];
+  if (!it || !p) return;
+  openSheet(`${sheetTop('Prieš ir po')}
+    <div class="stack">
+      <div class="compare">
+        <figure><div class="cmp-ph"><img src="${blobURL(it.image)}" alt=""></div><figcaption class="label">Prieš</figcaption></figure>
+        <figure><div class="cmp-ph"><img src="${blobURL(p.image)}" alt=""></div><figcaption class="label">Po</figcaption></figure>
+      </div>
+      ${p.warn ? `<div class="gap-note warn"><span class="label">Atidžiai</span>Atrodo, DI pakeitė rūbo spalvą ar atspalvį. Jei rūbas atrodo ne taip kaip tikras – palik seną nuotrauką.</div>` : `<p class="small muted center" style="margin:0">Spalvos nepasikeitė. Patikrink, ar rūbas atrodo kaip tikras.</p>`}
+      <div class="row"><button class="btn" style="flex:1" data-act="enh-drop" data-id="${id}">Palikti seną</button>
+        <button class="btn primary" style="flex:1" data-act="enh-keep" data-id="${id}">Naudoti naują</button></div>
+    </div>`);
+}
+
+// ---- Šviesa: šviesumas ir kontrastas be DI ----
+async function openLight(id) {
+  const it = itemById(id);
+  if (!it?.image) return;
+  const ed = document.createElement('div');
+  ed.className = 'editor';
+  const url = blobURL(it.image);
+  ed.innerHTML = `
+    <div class="lb-top"><span class="label">Šviesa</span><button class="x" data-ed="cancel">Atšaukti</button></div>
+    <div class="ed-stage light-stage"><img id="ltImg" src="${url}" alt=""></div>
+    <div class="ed-tools">
+      <label class="ed-size"><span class="label" style="width:88px">Šviesumas</span><input type="range" min="70" max="140" value="100" id="ltB"></label>
+      <label class="ed-size"><span class="label" style="width:88px">Kontrastas</span><input type="range" min="70" max="140" value="100" id="ltC"></label>
+      <label class="ed-size"><span class="label" style="width:88px">Šiluma</span><input type="range" min="-30" max="30" value="0" id="ltW"></label>
+      <div class="row"><button class="btn sm" data-ed="reset">Iš naujo</button><button class="btn sm primary" style="flex:1" data-ed="save">Išsaugoti</button></div>
+    </div>`;
+  document.body.appendChild(ed);
+  const img = ed.querySelector('#ltImg');
+  const v = () => ({ b: +ed.querySelector('#ltB').value / 100, c: +ed.querySelector('#ltC').value / 100, w: +ed.querySelector('#ltW').value });
+  const preview = () => {
+    const { b, c, w } = v();
+    img.style.filter = `brightness(${b}) contrast(${c}) sepia(${Math.max(0, w) / 100}) hue-rotate(${w < 0 ? w * 0.6 : 0}deg) saturate(${1 + Math.abs(w) / 200})`;
+  };
+  ed.addEventListener('input', preview);
+  ed.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-ed]');
+    if (!b) return;
+    if (b.dataset.ed === 'cancel') return ed.remove();
+    if (b.dataset.ed === 'reset') { ['ltB', 'ltC'].forEach((k) => (ed.querySelector('#' + k).value = 100)); ed.querySelector('#ltW').value = 0; return preview(); }
+    if (b.dataset.ed === 'save') {
+      b.disabled = true;
+      const { b: br, c: ct, w } = v();
+      const bm = await createImageBitmap(it.image);
+      const cv = document.createElement('canvas');
+      cv.width = bm.width; cv.height = bm.height;
+      const x = cv.getContext('2d', { willReadFrequently: true });
+      x.drawImage(bm, 0, 0);
+      const d = x.getImageData(0, 0, cv.width, cv.height);
+      const a = d.data;
+      const wr = 1 + w / 300, wb = 1 - w / 300;
+      for (let i = 0; i < a.length; i += 4) {
+        for (let k = 0; k < 3; k++) {
+          let val = a[i + k] * br;
+          val = (val - 128) * ct + 128;
+          if (k === 0) val *= wr;
+          if (k === 2) val *= wb;
+          a[i + k] = val < 0 ? 0 : val > 255 ? 255 : val;
+        }
+      }
+      x.putImageData(d, 0, 0);
+      const out = await new Promise((r) => cv.toBlob(r, 'image/png'));
+      it.prevImage = it.image;
+      it.image = out;
+      await db.put('items', it);
+      ed.remove();
+      openItem(it.id);
+      rerender();
+      toast('Šviesa pakoreguota');
+    }
+  });
+}
+
 // ---- Stiliaus profilis: ką stilistė žino apie jos skonį ----
 const itemNames = (ids) => ids.map(itemById).filter(Boolean).map((i) => i.name || catById(i.category)?.label || 'rūbas');
 
@@ -341,6 +461,9 @@ async function doRender(o, mode) {
     const blob = await renderOutfit({ items, categories: S.categories, mode, selfPhoto: S.selfPhoto, notes: o.imageNotes || '', bodyDesc: bodyForAI(S.me), bodyRef });
     o.renders = { ...(o.renders || {}), [mode]: blob };
     await saveOutfit(o);
+    const card = document.querySelector('.outfit-card .seg');
+    const visible = S.tab === 'fitas' && card && card.getBoundingClientRect().top < window.innerHeight && card.getBoundingClientRect().bottom > 0;
+    if (!visible) toast(mode === 'me' ? 'Vaizdas ant tavęs paruoštas' : 'Manekenas paruoštas', 7000, { label: 'Žiūrėti', fn: async () => { await setCurrent(o.id); S.renderTab = mode; location.hash = '#fitas'; await rerender(); document.querySelector('.outfit-card .seg')?.scrollIntoView({ block: 'start', behavior: 'smooth' }); } });
   } catch (e) {
     toast(e.message === 'NO_SELF' ? 'Įkelk savo nuotrauką skiltyje „Daugiau“' : 'Vaizdo sukurti nepavyko: ' + e.message, 6000);
   }
@@ -449,7 +572,28 @@ function viewFitas() {
 
   if (S.styling) html += `<div class="card">${loadingHTML('Stilistė rausiasi po tavo spintą…')}</div>`;
   if (cur) html += outfitCardHTML(cur);
-  return html + `</div>`;
+  return html + feedsHTML() + `</div>`;
+}
+
+function feedsHTML() {
+  if (S.items.length < 4) return '';
+  const ws = wearStats();
+  let html = '';
+  const fresh = [...S.items].filter((i) => i.image && Date.now() - i.createdAt < 14 * 864e5 && !ws[i.id]).sort((a, b) => b.createdAt - a.createdAt)[0];
+  if (fresh) {
+    html += `<div class="card feed-new">
+      <div class="fn-ph" data-act="item" data-id="${fresh.id}"><img src="${blobURL(fresh.image)}" alt=""></div>
+      <div class="stack" style="gap:8px;flex:1;min-width:0"><span class="label">Naujas spintoje</span>
+        <div class="serif" style="font-size:21px;line-height:1.15">${esc(fresh.name || 'Naujas rūbas')}</div>
+        <button class="btn sm primary" style="align-self:flex-start" data-act="style-with" data-id="${fresh.id}">Sukurk fitą su juo</button></div></div>`;
+  }
+  const forgotten = [...S.items].filter((i) => i.image && i.id !== fresh?.id)
+    .sort((a, b) => (ws[a.id]?.last || '0000').localeCompare(ws[b.id]?.last || '0000') || a.createdAt - b.createdAt).slice(0, 8);
+  if (forgotten.length >= 3) {
+    html += `<div class="section-head"><h3>Seniai vilkėti</h3><span class="label">Paliesk – sukursim fitą</span></div>
+      <div class="picker-row feed-row">${forgotten.map((it) => tileHTML(it, `<span class="badge">${ws[it.id] ? fmtDate(ws[it.id].last) : 'niekada'}</span>`, 'item')).join('')}</div>`;
+  }
+  return html;
 }
 
 function step(n, title, text, done, href) {
@@ -881,6 +1025,8 @@ async function runQueue() {
   S.queueRunning = false;
   const ids = S.batch?.ids || [];
   S.batch = null;
+  const mk = [[50, '50 rūbų spintoje. Tikra kolekcija.'], [25, '25 rūbai – deriniai darosi įdomesni.'], [10, 'Dešimt rūbų. Stilistė jau turi iš ko rinktis.'], [1, 'Pirmas rūbas spintoje. Gera pradžia.']].find(([k]) => S.items.length >= k);
+  if (mk && done) milestone('items' + mk[0], mk[1]);
   if (done === 1 && wasSingle) openItem(lastId, true);
   else if (ids.length > 1) openReview(ids);
   else if (done) rerender();
@@ -939,6 +1085,7 @@ function openItem(id, fresh = false) {
         <button data-act="img-op" data-op="rotL" aria-label="Pasukti į kairę"><svg viewBox="0 0 24 24"><path d="M4 9.5A8 8 0 1 1 5.6 16"/><path d="M4 4.5v5h5"/></svg><span>Pasukti</span></button>
         <button data-act="img-op" data-op="rotR" aria-label="Pasukti į dešinę"><svg viewBox="0 0 24 24"><path d="M20 9.5A8 8 0 1 0 18.4 16"/><path d="M20 4.5v5h-5"/></svg><span>Pasukti</span></button>
         <button data-act="img-op" data-op="flipH" aria-label="Apversti"><svg viewBox="0 0 24 24"><path d="M12 3v18"/><path d="M9 7 3.5 17H9z"/><path d="M15 7l5.5 10H15z"/></svg><span>Apversti</span></button>
+        <button data-act="light" aria-label="Šviesa"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8"/></svg><span>Šviesa</span></button>
         <button data-act="erase" aria-label="Trinti foną"><svg viewBox="0 0 24 24"><path d="M14.5 4.5 20 10 11 19H6.5L4 16.5z"/><path d="M9.5 9.5 15 15"/><path d="M11 19h9"/></svg><span>Trinti</span></button>
       </div>` : ''}
       ${fresh ? `<div class="label center">${S.keyOk ? 'DI užpildė informaciją – pataisyk, jei reikia' : 'Užpildyk informaciją (su DI raktu tai vyksta automatiškai)'}</div>` : ''}
@@ -947,12 +1094,20 @@ function openItem(id, fresh = false) {
       <div class="field"><label>Spalvos</label><input class="input" name="colors" value="${esc((it.colors || []).join(', '))}" placeholder="balta, smėlio"></div>
       <div class="field"><label>Sezonai</label><div class="chips wrap" data-group="seasons">${SEASONS.map((s) => `<button class="chip soft ${(it.seasons || []).includes(s) ? 'on' : ''}" data-act="toggle" data-v="${s}">${s}</button>`).join('')}</div></div>
       <div class="field"><label>Progos</label><div class="chips wrap" data-group="occasions">${OCCASIONS.map((s) => `<button class="chip soft ${(it.occasions || []).includes(s) ? 'on' : ''}" data-act="toggle" data-v="${s}">${s}</button>`).join('')}</div></div>
+      <div class="field"><label>Kaina, € · nebūtina</label><input class="input" name="price" inputmode="decimal" value="${it.price ?? ''}" placeholder="pvz. 39"></div>
       <div class="field"><label>Šiltumas</label><div class="warmth">${WARMTH.map((e, i) => `<button class="${it.warmth === i + 1 ? 'on' : ''}" data-act="warmth" data-v="${i + 1}">${e}</button>`).join('')}</div></div>
-      <div class="label center">${ws ? `Vilkėta ${ws.count} k. · paskutinį kartą ${fmtDate(ws.last)}` : 'Dar nevilkėta'}</div>
+      <div class="wear-stats">
+        <div><span class="label">Vilkėta</span><b>${ws ? ws.count : 0}<small> k.</small></b><span class="small muted">${ws ? 'paskutinį kartą ' + fmtDate(ws.last) : 'dar nė karto'}</span></div>
+        <div><span class="label">Vienam dėvėjimui</span><b>${it.price ? (it.price / Math.max(1, ws ? ws.count : 0)).toFixed(2) + '<small> €</small>' : '—'}</b><span class="small muted">${it.price ? `kaina ${it.price} €` : 'įrašyk kainą'}</span></div>
+      </div>
+      <div class="row"><button class="btn sm" style="flex:1" data-act="wear-item" data-id="${it.id}">Dėviu šiandien</button>
+        <button class="btn sm" style="flex:1" data-act="style-with" data-id="${it.id}">Fitas su šiuo</button></div>
       <button class="btn primary block" data-act="save-item">Išsaugoti</button>
       <div class="row">
-        <button class="btn sm" style="flex:1" data-act="ai-enhance">Pagražinti su DI · ~0,10 $</button>
-        ${it.prevImage ? `<button class="btn sm ghost" data-act="undo-enhance">Atšaukti pagražinimą</button>` : ''}
+        ${S.pendingEnh[it.id] ? `<button class="btn sm primary" style="flex:1" data-act="enh-compare" data-id="${it.id}">Peržiūrėti pagražinimą</button>`
+          : S.enhancing.has(it.id) ? `<button class="btn sm" style="flex:1" disabled>DI gražina fone…</button>`
+          : `<button class="btn sm" style="flex:1" data-act="ai-enhance">Pagražinti su DI · ~0,10 $</button>`}
+        ${it.prevImage ? `<button class="btn sm ghost" data-act="undo-enhance">Grąžinti ankstesnę</button>` : ''}
       </div>
       <div class="row">
         <button class="btn sm" style="flex:1" data-act="recut">${it.cutout ? 'Grąžinti originalą' : 'Iškirpti foną'}</button>
@@ -962,6 +1117,17 @@ function openItem(id, fresh = false) {
 }
 
 // ================= Konstruktorius =================
+const BOARD = [['outer', 'Paltas'], ['top', 'Viršus'], ['head', 'Galva'], ['bottom', 'Apačia'], ['side', 'Rankinė'], ['legwear', 'Kojinės'], ['shoes', 'Batai']];
+function slotBoardHTML() {
+  const chosen = [...S.build].map(itemById).filter(Boolean);
+  return (S.me.done ? `<div class="sb-fig">${avatarSVG(S.me, { silhouette: true })}</div>` : '') + BOARD.map(([slot, label]) => {
+    const its = chosen.filter((i) => slotOf(i) === slot || (slot === 'top' && slotOf(i) === 'onepiece'));
+    const has = S.items.some((i) => slotOf(i) === slot || (slot === 'top' && slotOf(i) === 'onepiece'));
+    return `<button class="sb-slot sb-${slot} ${its.length ? 'filled' : ''} ${has ? '' : 'empty'}" data-act="sb-go" data-v="${slot}">
+      ${its.length ? `<img src="${blobURL(its[0].image)}" alt="">${its.length > 1 ? `<span class="sb-n">+${its.length - 1}</span>` : ''}` : `<span>+ ${label}</span>`}</button>`;
+  }).join('');
+}
+
 function openBuilder(editId = null) {
   if (!S.items.length) {
     toast('Pirmiausia įkelk rūbų į spintą');
@@ -980,7 +1146,7 @@ function openBuilder(editId = null) {
     </div></div>`;
   }
   openSheet(`${sheetTop(editId ? 'Keisti rūbus' : 'Susidėk fitą')}
-    <div class="stack">${rows}
+    <div class="stack"><div class="slot-board" id="slotBoard">${slotBoardHTML()}</div>${rows}
       <button class="btn primary block" data-act="build-save">${editId ? 'Išsaugoti' : 'Sukurti fitą'}</button>
     </div>`);
 }
@@ -1044,6 +1210,7 @@ function drawShuffle(randomize = false) {
       <button class="x" data-dl="close">Uždaryti</button><span class="dl-title">Dėliok</span>
       <button class="x" data-dl="rare" style="color:${DL.rare ? 'var(--wine)' : ''}">${DL.rare ? '● ' : ''}Retai vilkėti</button></div>
     ${hasDress ? `<div class="dl-mode"><button class="${DL.mode === 'sep' ? 'on' : ''}" data-dl="mode" data-v="sep">Viršus + apačia</button><button class="${DL.mode === 'dress' ? 'on' : ''}" data-dl="mode" data-v="dress">Suknelė</button></div>` : ''}
+    ${S.hintDl ? '' : `<div class="dl-hint"><span>Brauk eilę į šoną, <b>prisek</b> tai, kas patinka, ir spausk <b>Maišyti</b>.</span><button class="x" data-dl="hint-x">Supratau</button></div>`}
     <div class="dl-rows">${rows.map((r) => {
       const cards = (r.optional ? [`<div class="dl-card none" data-i="0"><span class="label">${r.none}</span></div>`] : [])
         .concat(r.items.map((it, i) => `<div class="dl-card" data-i="${i + (r.optional ? 1 : 0)}" data-id="${it.id}"><img src="${blobURL(it.image)}" alt="" draggable="false"></div>`));
@@ -1100,6 +1267,7 @@ document.addEventListener('click', async (e) => {
   if (a === 'rare') { DL.rare = !DL.rare; toast(DL.rare ? 'Dažniau rodys seniai vilkėtus rūbus' : 'Visi rūbai vienodai'); return drawShuffle(); }
   if (a === 'mode') { DL.mode = b.dataset.v; return drawShuffle(true); }
   if (a === 'shuffle') return shuffleScroll();
+  if (a === 'hint-x') { S.hintDl = true; setSetting('hintDl', true); b.closest('.dl-hint').remove(); return; }
   if (a === 'save') {
     const ids = [];
     DL.el.querySelectorAll('.dl-row').forEach((row) => {
@@ -1131,7 +1299,7 @@ async function setCurrent(id) {
   await setSetting('currentOutfit', id);
 }
 
-async function doStyle(vibe, exclude = []) {
+async function doStyle(vibe, exclude = [], must = []) {
   if (!S.keyOk) return toast('Įjunk DI stilistę – įvesk raktą skiltyje „Daugiau“');
   if (S.items.length < 2) return toast('Įkelk bent kelis rūbus į spintą');
   S.styling = true;
@@ -1140,10 +1308,10 @@ async function doStyle(vibe, exclude = []) {
   try {
     const r = await styleOutfit({
       vibe, items: S.items, categories: S.categories,
-      weather: weatherForAI(S.weather), wearStats: wearStats(), exclude, style: styleCtx(),
+      weather: weatherForAI(S.weather), wearStats: wearStats(), exclude, style: styleCtx(), must,
     });
     const o = {
-      id: uid(), title: r.title, explanation: r.explanation, tip: r.tip, vibe,
+      id: uid(), title: r.title, explanation: r.explanation, tip: r.tip, vibe, gap: r.gap || '',
       itemIds: r.itemIds, createdAt: Date.now(), favorite: false, source: 'ai', renders: {},
     };
     await saveOutfit(o);
@@ -1200,6 +1368,7 @@ const actions = {
     S.worn.push(w);
     logEvent(`Vilkėjo: ${itemNames(o.itemIds).join(' + ')}`);
     toast('Pažymėta kalendoriuje');
+    milestone('wear1', 'Pirmas užfiksuotas fitas. Nuo šiol stilistė primins pamirštus rūbus.');
     closeSheet();
     rerender();
   },
@@ -1214,10 +1383,23 @@ const actions = {
     if (S.build.has(id)) {
       S.build.delete(id);
       el.classList.remove('sel');
+      const b = $('#slotBoard');
+      if (b) b.innerHTML = slotBoardHTML();
       return;
     }
     S.build.add(id);
     el.classList.add('sel');
+    const b = $('#slotBoard');
+    if (b) b.innerHTML = slotBoardHTML();
+  },
+  'sb-go'(el) {
+    let slot = el.dataset.v;
+    let row = document.querySelector(`.picker-row[data-slot="${slot}"]`);
+    if (!row && slot === 'top') row = document.querySelector('.picker-row[data-slot="onepiece"]');
+    if (!row) return toast('Šiai vietai spintoje rūbų dar nėra');
+    row.parentElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    row.parentElement.classList.add('flash');
+    setTimeout(() => row.parentElement.classList.remove('flash'), 900);
   },
   async 'build-save'() {
     if (!S.build.size) return toast('Pasirink bent vieną rūbą');
@@ -1265,6 +1447,8 @@ const actions = {
     it.occasions = [...f.querySelectorAll('[data-group=occasions] .on')].map((b) => b.dataset.v);
     const w = f.querySelector('.warmth .on');
     it.warmth = w ? +w.dataset.v : it.warmth;
+    const pr = parseFloat((f.querySelector('[name=price]').value || '').replace(',', '.'));
+    it.price = pr > 0 ? Math.round(pr * 100) / 100 : null;
     await db.put('items', it);
     closeSheet();
     toast('Išsaugota');
@@ -1555,6 +1739,25 @@ const actions = {
     await afterOutfitEdit(o, 'Rūbas pridėtas');
   },
   noop() {},
+  async 'wear-item'(el) {
+    const id = el.dataset.id;
+    const today = ymd();
+    if (S.worn.some((w) => w.date === today && w.itemIds.includes(id))) return toast('Šiandien jau pažymėta');
+    const w = { id: uid(), date: today, outfitId: null, itemIds: [id] };
+    await db.put('worn', w);
+    S.worn.push(w);
+    logEvent(`Vilkėjo: ${itemNames([id]).join('')}`);
+    toast('Pažymėta kalendoriuje');
+    openItem(id);
+    rerender();
+  },
+  'style-with'(el) {
+    const id = el.dataset.id;
+    if (!S.keyOk) return toast('Tam reikia DI rakto (skiltis „Daugiau“)');
+    closeSheet();
+    location.hash = '#fitas';
+    setTimeout(() => doStyle(`Derinys su šiuo rūbu: ${itemNames([id])[0]}`, [], [id]), 50);
+  },
   async 'rv-del'(el) {
     const id = el.dataset.id;
     await db.del('items', id);
@@ -1575,11 +1778,14 @@ const actions = {
     fileInput.multiple = false;
     fileInput.click();
   },
-  async 'ai-enhance'(el) {
+  async 'ai-enhance'() {
     const it = itemById($('#itemForm').dataset.id);
     if (!it) return;
     if (!S.keyOk) return toast('Reikia DI rakto (skiltis „Daugiau“)');
-    busyOn('DI gražina nuotrauką', 'apie 30 sekundžių');
+    if (S.enhancing.has(it.id)) return;
+    S.enhancing.add(it.id);
+    openItem(it.id);
+    toast('DI gražina fone – gali naršyti toliau', 3500);
     try {
       let out = await enhanceItemPhoto(it.image, it.name);
       // jei DI grąžino baltą foną – iškerpam nemokamai telefone
@@ -1592,18 +1798,43 @@ const actions = {
         if (x.getImageData(0, 0, 1, 1).data[3] > 200) out = await removeBackground(out);
       } catch (_) {}
       out = await trimTransparent(out, 8);
-      it.prevImage = it.image;
-      it.image = await resize(out, 900, 'image/png');
-      it.cutout = true;
-      await db.put('items', it);
-      busyOff();
-      toast('Pagražinta');
-      openItem(it.id);
-      rerender();
+      const image = await resize(out, 900, 'image/png');
+      const shift = await colorShift(it.image, image);
+      S.pendingEnh[it.id] = { image, warn: shift > 38 };
+      S.enhancing.delete(it.id);
+      const open = $('#itemForm')?.dataset.id === it.id;
+      if (open) openCompare(it.id);
+      else toast('Pagražinimas paruoštas', 9000, { label: 'Peržiūrėti', fn: () => openCompare(it.id) });
     } catch (e) {
-      busyOff();
-      toast('Nepavyko: ' + e.message, 5000);
+      S.enhancing.delete(it.id);
+      toast('Pagražinti nepavyko: ' + e.message, 6000);
+      if ($('#itemForm')?.dataset.id === it.id) openItem(it.id);
     }
+  },
+  'enh-compare'(el) {
+    openCompare(el.dataset.id);
+  },
+  async 'enh-keep'(el) {
+    const it = itemById(el.dataset.id);
+    const p = S.pendingEnh[el.dataset.id];
+    if (!it || !p) return closeSheet();
+    it.prevImage = it.image;
+    it.image = p.image;
+    it.cutout = true;
+    delete S.pendingEnh[it.id];
+    await db.put('items', it);
+    toast('Išsaugota nauja nuotrauka');
+    openItem(it.id);
+    rerender();
+  },
+  'enh-drop'(el) {
+    delete S.pendingEnh[el.dataset.id];
+    toast('Palikta sena nuotrauka');
+    openItem(el.dataset.id);
+  },
+  light() {
+    const id = $('#itemForm')?.dataset.id;
+    if (id) openLight(id);
   },
   async 'undo-enhance'() {
     const it = itemById($('#itemForm').dataset.id);
@@ -1767,6 +1998,7 @@ async function loadAll() {
   S.profile = { about: '', learned: [], ...((await getSetting('styleProfile')) || {}) };
   S.events = (await getSetting('styleEvents')) || [];
   S.me = (await getSetting('me')) || {};
+  S.hintDl = !!(await getSetting('hintDl'));
 }
 
 async function loadWeather() {

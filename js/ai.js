@@ -136,6 +136,8 @@ const STYLIST =
   'Jei įmanoma, rinkis rečiau vilkėtus rūbus, bet stilius svarbiau. ' +
   'SVARBIAUSIA – jos stiliaus profilis (jos_stilius): ką ji pati apie save parašė, ką tu apie ją išmokai, ' +
   'kokie fitai jai patiko, kuriuos atmetė ir ką pati keitė. Derink prie jos skonio, nekartok to, kas jai nepatiko. ' +
+  'ORAI: jei šalta, vėjuota ar lyja – pirmiausia sluoksniuok iš to, kas yra (megztinis po švarku, marškiniai po megztiniu, pėdkelnės po kelnėmis ar sijonu, šiltesni batai). ' +
+  'Jei spintoje tikrai trūksta tinkamo rūbo orams (pvz. nėra šiltos striukės ar uždarų batų), švelniai ir trumpai pasakyk tai lauke "gap", be priekaištų. ' +
   'Atsižvelk į jos figūrą ir spalvų tipą (jos_figura_ir_spalvos) – rinkis jai palankius siluetus ir spalvas prie veido, bet jos skonis svarbiau už taisykles. ';
 
 function profileFor(style) {
@@ -170,7 +172,7 @@ function wardrobeFor(items, categories, wearStats) {
   });
 }
 
-export async function styleOutfit({ vibe, items, categories, weather, wearStats, exclude = [], style = null }) {
+export async function styleOutfit({ vibe, items, categories, weather, wearStats, exclude = [], style = null, must = [] }) {
   const wardrobe = wardrobeFor(items, categories, wearStats);
   const today = new Date().toISOString().slice(0, 10);
   const out = await chatJSON([
@@ -179,8 +181,9 @@ export async function styleOutfit({ vibe, items, categories, weather, wearStats,
       content:
         STYLIST +
         'Atsakyk TIK JSON: {"title": "trumpas žaismingas pavadinimas", "itemIds": [...], ' +
-        '"explanation": "2–3 sakiniai kodėl šis derinys", "tip": "1 stiliaus patarimas (pvz. kaip susegti, kokį makiažą)"}. ' +
-        'Jei spintoje trūksta būtinų rūbų, vis tiek pasiūlyk geriausią įmanomą ir paminėk, ko trūksta.',
+        '"explanation": "2–3 sakiniai kodėl šis derinys", "tip": "1 stiliaus patarimas (pvz. kaip susegti, kokį makiažą)", ' +
+        '"gap": "" arba trumpai, ko spintoje trūksta šiems orams/progai}. ' +
+        'Jei spintoje trūksta būtinų rūbų, vis tiek pasiūlyk geriausią įmanomą. Rūbus iš "butinai_itraukti" privalai įtraukti.',
     },
     {
       role: 'user',
@@ -190,12 +193,14 @@ export async function styleOutfit({ vibe, items, categories, weather, wearStats,
         data: today,
         orai: weather || 'nežinomi',
         nesiulyti_tiksliai_tokio_pat_derinio_kaip: exclude,
+        butinai_itraukti: must,
         spinta: wardrobe,
       }),
     },
   ]);
   const valid = new Set(items.map((i) => i.id));
   out.itemIds = (out.itemIds || []).filter((id) => valid.has(id));
+  for (const id of must) if (valid.has(id) && !out.itemIds.includes(id)) out.itemIds.push(id);
   if (!out.itemIds.length) throw new Error('Stilistei nepavyko parinkti rūbų. Pabandyk kitaip aprašyti norą.');
   return out;
 }
