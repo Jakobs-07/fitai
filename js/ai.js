@@ -135,12 +135,14 @@ const STYLIST =
   'pėdkelnės/kojinės jei tinka; 0–3 aksesuarai. Atsižvelk į orus, progą, spalvų derinius. ' +
   'Jei įmanoma, rinkis rečiau vilkėtus rūbus, bet stilius svarbiau. ' +
   'SVARBIAUSIA – jos stiliaus profilis (jos_stilius): ką ji pati apie save parašė, ką tu apie ją išmokai, ' +
-  'kokie fitai jai patiko, kuriuos atmetė ir ką pati keitė. Derink prie jos skonio, nekartok to, kas jai nepatiko. ';
+  'kokie fitai jai patiko, kuriuos atmetė ir ką pati keitė. Derink prie jos skonio, nekartok to, kas jai nepatiko. ' +
+  'Atsižvelk į jos figūrą ir spalvų tipą (jos_figura_ir_spalvos) – rinkis jai palankius siluetus ir spalvas prie veido, bet jos skonis svarbiau už taisykles. ';
 
 function profileFor(style) {
   if (!style) return null;
   const p = {};
   if (style.about) p.ji_pati_apie_save = style.about;
+  if (style.body) p.jos_figura_ir_spalvos = style.body;
   if (style.learned?.length) p.ka_ismokai_apie_jos_skoni = style.learned;
   if (style.favorites?.length) p.patike_fitai = style.favorites;
   if (style.events?.length) p.paskutiniai_jos_veiksmai = style.events;
@@ -199,7 +201,7 @@ export async function styleOutfit({ vibe, items, categories, weather, wearStats,
 }
 
 // ---- Vaizdas "ant manekeno" arba "ant manęs" ----
-export async function renderOutfit({ items, categories, mode, selfPhoto, notes = '' }) {
+export async function renderOutfit({ items, categories, mode, selfPhoto, notes = '', bodyDesc = '', bodyRef = null }) {
   const catById = Object.fromEntries(categories.map((c) => [c.id, c]));
   const fd = new FormData();
   let idx = 1;
@@ -208,6 +210,9 @@ export async function renderOutfit({ items, categories, mode, selfPhoto, notes =
   if (mode === 'me') {
     if (!selfPhoto) throw new Error('NO_SELF');
     fd.append('image[]', await toPngForAI(selfPhoto, 1024), 'person.png');
+    idx = 2;
+  } else if (bodyRef) {
+    fd.append('image[]', bodyRef, 'body.png');
     idx = 2;
   }
   for (const it of items.slice(0, mode === 'me' ? 9 : 10)) {
@@ -226,15 +231,23 @@ export async function renderOutfit({ items, categories, mode, selfPhoto, notes =
   if (mode === 'me') {
     prompt =
       'Realistic fashion photo. Show the woman from image 1 wearing EXACTLY the clothing items from the other images, ' +
-      'combined as one outfit. Keep her face, hair, body shape, height proportions and skin tone identical to image 1. ' +
+      'combined as one outfit. Keep her face, hair and skin tone identical to image 1. ' +
+      'BODY PROPORTIONS ARE SACRED: keep her exact body shape, weight, height, leg length, torso length, ' +
+      'shoulder, bust, waist and hip widths and head-to-body ratio exactly as in image 1. Do NOT slim her, do NOT lengthen her legs, ' +
+      'do NOT make her taller, curvier or thinner, do NOT idealize or retouch her figure. Only the clothes change. ' +
+      (bodyDesc ? `For reference she is ${bodyDesc}. ` : '') +
       'Reproduce every garment faithfully: same color, pattern, texture, cut and details. ' +
       'Full body, standing, natural relaxed pose, head to toe visible, plain warm beige studio background, ' +
       'soft natural light, high-end editorial look.\n' + garments;
   } else {
     prompt =
       'Realistic fashion e-commerce photo of a neutral, faceless matte white female mannequin, full body, head to toe, ' +
-      'with the realistic proportions of an average-height woman (about 165 cm tall): natural leg length and torso, NOT an elongated, ' +
-      'extra-tall runway mannequin. The mannequin stands naturally and fits fully in the frame with some empty space above the head and below the feet. ' +
+      (bodyDesc
+        ? `with the exact body proportions of ${bodyDesc}. ` +
+          (bodyRef ? 'Image 1 is ONLY a grey body-shape reference silhouette: copy its proportions exactly (shoulder, waist and hip widths, leg and torso length, build), but do NOT copy its color, hair or flat style. ' : '') +
+          'Do NOT idealize, slim or elongate the figure. '
+        : 'with the realistic proportions of an average-height woman (about 165 cm tall): natural leg length and torso, NOT an elongated, extra-tall runway mannequin. ') +
+      'The mannequin stands naturally and fits fully in the frame with some empty space above the head and below the feet. ' +
       'It wears EXACTLY the clothing items from the provided images, combined as one outfit. ' +
       'Reproduce every garment faithfully: same color, pattern, texture, cut and details. ' +
       'Plain warm beige studio background, soft even lighting, centered.\n' + garments;
@@ -266,7 +279,7 @@ export async function renderOutfit({ items, categories, mode, selfPhoto, notes =
     const body = new FormData();
     for (const [k, v] of fd.entries()) body.append(k, v);
     body.append('model', model);
-    if (extras) { body.append('size', '1024x1536'); body.append('quality', 'medium'); }
+    if (extras) { body.append('size', '1024x1536'); body.append('quality', 'medium'); body.append('input_fidelity', 'high'); }
     const r = await fetch(`${API}/images/edits`, { method: 'POST', headers: { Authorization: `Bearer ${await key()}` }, body });
     if (!r.ok) await fail(r);
     return r;
@@ -381,4 +394,26 @@ export async function enhanceItemPhoto(blob, name = '') {
   const url = j.data?.[0]?.url;
   if (url) return (await fetch(url)).blob();
   throw new Error('Pagražinti nepavyko.');
+}
+
+// ---- Spalvų tipas iš asmenukės ----
+export async function analyzeSelfie(blob) {
+  const img = await toDataURLForAI(blob);
+  return chatJSON([
+    { role: 'system', content: 'You are a professional color analyst. Look at the person in the photo (skin, hair, eyes) and return ONLY JSON.' },
+    {
+      role: 'user',
+      content: [
+        {
+          type: 'text',
+          text:
+            'Return JSON: {"skin": one of s1 (very light), s2 (light), s3 (medium), s4 (olive/tan), s5 (dark), ' +
+            '"hair": one of blond, lbrown, dbrown, black, red, grey, "eyes": one of blue, green, hazel, brown, ' +
+            '"undertone": one of warm, cool, neutral, "season": one of spring, summer, autumn, winter}. ' +
+            'Ignore lighting color casts as much as possible.',
+        },
+        { type: 'image_url', image_url: { url: img, detail: 'low' } },
+      ],
+    },
+  ]);
 }

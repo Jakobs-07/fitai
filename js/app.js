@@ -1,7 +1,8 @@
 import { db, getSetting, setSetting, uid, requestPersist, exportAll, importAll, migrateBlobs } from './db.js';
 import { DEFAULT_CATEGORIES, GROUPS, SLOTS, SEASONS, OCCASIONS, VIBE_IDEAS } from './data.js';
 import { resize, removeBackground, blobURL, transformImage, trimTransparent, autoEnhance } from './images.js';
-import { tagItem, styleOutfit, renderOutfit, chatAboutOutfit, enhanceItemPhoto, hasKey, testKey, modelsInUse } from './ai.js';
+import { tagItem, styleOutfit, renderOutfit, chatAboutOutfit, enhanceItemPhoto, hasKey, testKey, modelsInUse, analyzeSelfie } from './ai.js';
+import { runOnboarding, runCoach, avatarSVG, avatarPNG, describeMe, bodyForAI, fLoader, startTipRotation, busyOn, busyOff, BODY_TYPES, BUILDS, SEASONS_C } from './profile.js';
 import { getWeather, weatherForAI, findCity } from './weather.js';
 
 // ================= Būsena =================
@@ -28,6 +29,7 @@ const S = {
   selecting: false,
   chatting: null,
   profile: { about: '', learned: [] },
+  me: {},
   events: [],
   sel: new Set(),
 };
@@ -83,7 +85,7 @@ function plural(n, one, few, many) {
   return many;
 }
 
-const loadingHTML = (text) => `<div class="loading"><span class="serif">${text}</span><div class="loader"></div></div>`;
+const loadingHTML = (text, sub = '') => fLoader(text, sub);
 
 function tileHTML(it, extra = '', act = 'item', selected = false) {
   const c = catById(it.category);
@@ -159,7 +161,7 @@ function outfitCardHTML(o) {
   } else {
     const blob = o.renders && o.renders[tab];
     if (busy && S.rendering.mode === tab) {
-      visual = `<div class="render-box">${loadingHTML('Kuriamas vaizdas…')}<span class="label" style="margin-top:-20px">Iki minutės</span></div>`;
+      visual = `<div class="render-box">${loadingHTML('Kuriamas vaizdas…', 'iki minutės')}</div>`;
     } else if (blob) {
       visual = `<div class="render-box" data-act="zoom-img" data-o="${o.id}" data-mode="${tab}"><img src="${blobURL(blob)}" alt="Outfitas"></div>
         <div class="row" style="margin:10px 18px 0;justify-content:space-between"><button class="btn sm ghost" style="padding-left:0;white-space:nowrap" data-act="render" data-mode="${tab}">Sugeneruoti iš naujo</button>
@@ -169,7 +171,8 @@ function outfitCardHTML(o) {
       const isMe = tab === 'me';
       const needSelf = isMe && !S.selfPhoto;
       visual = `<div class="render-box"><div class="loading">
-        <span class="serif">${needSelf ? 'Reikia tavo nuotraukos' : isMe ? 'Kaip atrodytų ant tavęs?' : 'Pažiūrėk ant manekeno'}</span>
+        ${!isMe && S.me.done ? avatarSVG(S.me, { cls: 'rb-av', silhouette: false }) : ''}
+        <span class="serif">${needSelf ? 'Reikia tavo nuotraukos' : isMe ? 'Kaip atrodytų ant tavęs?' : S.me.done ? 'Manekenas tavo figūros' : 'Pažiūrėk ant manekeno'}</span>
         <span class="label">${needSelf ? 'Įkelk ją skiltyje „Daugiau“' : 'Kaina ~0,05–0,20 $'}</span>
         ${needSelf ? `<a class="btn sm" href="#nustatymai">Įkelti nuotrauką</a>` : `<button class="btn primary sm" data-act="render" data-mode="${tab}">Sugeneruoti vaizdą</button>`}
       </div></div>`;
@@ -311,7 +314,7 @@ const itemNames = (ids) => ids.map(itemById).filter(Boolean).map((i) => i.name |
 function styleCtx() {
   const favorites = S.outfits.filter((o) => o.favorite).sort((a, b) => b.createdAt - a.createdAt).slice(0, 10)
     .map((o) => itemNames(o.itemIds).join(' + ')).filter(Boolean);
-  return { about: S.profile.about, learned: S.profile.learned, favorites, events: S.events.slice(-15).map((e) => e.text) };
+  return { about: S.profile.about, body: describeMe(S.me), learned: S.profile.learned, favorites, events: S.events.slice(-15).map((e) => e.text) };
 }
 
 async function logEvent(text) {
@@ -333,7 +336,9 @@ async function doRender(o, mode) {
   await rerender();
   try {
     const items = o.itemIds.map(itemById).filter(Boolean);
-    const blob = await renderOutfit({ items, categories: S.categories, mode, selfPhoto: S.selfPhoto, notes: o.imageNotes || '' });
+    let bodyRef = null;
+    if (mode === 'mannequin' && S.me.done) { try { bodyRef = await avatarPNG(S.me); } catch (e) { console.warn('avatar', e); } }
+    const blob = await renderOutfit({ items, categories: S.categories, mode, selfPhoto: S.selfPhoto, notes: o.imageNotes || '', bodyDesc: bodyForAI(S.me), bodyRef });
     o.renders = { ...(o.renders || {}), [mode]: blob };
     await saveOutfit(o);
   } catch (e) {
@@ -414,7 +419,7 @@ function viewFitas() {
   const dateStr = new Date().toLocaleDateString('lt-LT', { weekday: 'long', month: 'long', day: 'numeric' });
   const cur = outfitById(S.currentId);
   let html = `<div class="stack">
-    <div class="hello"><div class="h-title">${g1}<br><em>${g2}</em></div><div class="label h-sub">${dateStr}</div></div>`;
+    <div class="hello"><div class="h-title">${g1}<br><em>${g2}${S.me.name ? ', ' + esc(S.me.name) : ''}</em></div><div class="label h-sub">${dateStr}</div></div>`;
 
   if (S.items.length < 2 || !S.keyOk) {
     html += `<div class="card"><div class="label" style="margin-bottom:6px">Pradžia</div><div class="steps-list">
@@ -559,6 +564,24 @@ function viewKalendorius() {
   return html + `</div>`;
 }
 
+function profileCardHTML() {
+  const me = S.me;
+  if (!me.done) {
+    return `<div class="card panel-sand set-block">${setHead('—', 'Mano profilis', 'Figūra, spalvos ir avataras')}
+      <button class="btn primary" data-act="onboard" data-v="1">Susikurti profilį</button></div>`;
+  }
+  const bt = BODY_TYPES.find((b) => b.id === me.bodyType);
+  const se = SEASONS_C[me.season];
+  return `<div class="card set-block">${setHead('—', me.name ? esc(me.name) : 'Mano profilis', 'Pagal tai piešiamas manekenas ir parenkami deriniai')}
+    <div class="prof-row">${avatarSVG(me, { cls: 'prof-av' })}
+      <dl class="av-facts"><dt>Ūgis</dt><dd>${me.height} cm</dd><dt>Sudėjimas</dt><dd>${BUILDS.find((b) => b.id === me.build)?.label || '—'}</dd>
+      <dt>Figūra</dt><dd>${bt ? bt.label : '—'}</dd><dt>Spalvos</dt><dd>${se ? se.label : '—'}</dd>${me.styles?.length ? `<dt>Stilius</dt><dd>${esc(me.styles.slice(0, 3).join(', '))}</dd>` : ''}</dl></div>
+    ${se ? `<div class="palette">${se.good.map(([n, hex]) => `<span><i style="background:${hex}"></i>${n}</span>`).join('')}</div>` : ''}
+    ${bt ? `<div class="tip" style="margin-top:0"><span class="label">Tavo figūrai</span>${bt.tip}</div>` : ''}
+    <div class="row"><button class="btn sm" style="flex:1" data-act="onboard" data-v="1">Redaguoti</button><button class="btn sm" style="flex:1" data-act="coach">Rodyti gidą</button></div>
+  </div>`;
+}
+
 const setHead = (n, title, sub = '') => `<div class="set-head"><span class="n">${n}</span><div><b>${title}</b>${sub ? `<div class="small muted">${sub}</div>` : ''}</div></div>`;
 
 async function viewNustatymai() {
@@ -578,6 +601,8 @@ async function viewNustatymai() {
     ${!isStandalone() ? `<div class="card panel-sand set-block">${setHead('—', 'Įsidiek į telefoną')}
       <ol class="steps small"><li>Atsidaryk šį puslapį <b>Safari</b></li><li>Spausk <b>Bendrinti</b> (kvadratas su rodykle) apačioje</li>
       <li>Pasirink <b>„Į pradžios ekraną“</b></li><li>Spausk <b>Pridėti</b></li></ol></div>` : ''}
+
+    ${profileCardHTML()}
 
     <div class="card set-block">
       ${setHead('01', 'DI stilistė', `<span class="${S.keyOk ? 'status-ok' : 'status-no'}">${S.keyOk ? 'Įjungta' : 'Neįjungta – reikia OpenAI rakto'}</span>`)}
@@ -713,7 +738,7 @@ fileInput.addEventListener('change', async () => {
     const it = itemById(fileTarget.slice(8));
     fileTarget = 'items';
     if (!it) return;
-    toast('Ruošiama nuotrauka…', 60000);
+    busyOn('Ruošiama nuotrauka', 'karpomas fonas');
     try {
       const original = await resize(files[0], 1400, 'image/jpeg', 0.85);
       let image = original, cutout = false;
@@ -724,15 +749,18 @@ fileInput.addEventListener('change', async () => {
       Object.assign(it, { image, original, cutout });
       delete it.prevImage;
       await db.put('items', it);
+      busyOff();
       toast('Nuotrauka atnaujinta');
       openItem(it.id);
       rerender();
     } catch (e) {
+      busyOff();
       toast('Nepavyko: ' + e.message);
     }
     return;
   }
   if (fileTarget === 'import') {
+    busyOn('Atkuriama spinta');
     try {
       await importAll(files[0]);
       await loadAll();
@@ -741,6 +769,7 @@ fileInput.addEventListener('change', async () => {
     } catch (e) {
       toast('Nepavyko atkurti: ' + e.message);
     }
+    busyOff();
     return;
   }
   const single = files.length === 1;
@@ -1081,13 +1110,14 @@ const actions = {
       it.image = it.original;
       it.cutout = false;
     } else {
-      el.disabled = true;
-      el.textContent = 'Karpoma…';
+      busyOn('Karpomas fonas', 'kelios sekundės');
       try {
-        const cut = await removeBackground(it.original, (lab, p) => (el.textContent = `${lab} ${Math.round(p * 100)}%`));
+        const cut = await removeBackground(it.original);
         it.image = await resize(cut, 900, 'image/png');
         it.cutout = true;
+        busyOff();
       } catch (e) {
+        busyOff();
         console.warn('bg', e);
         toast('Fono iškirpti nepavyko. Patikrink internetą ir bandyk dar kartą.', 4000);
         el.disabled = false;
@@ -1289,12 +1319,15 @@ const actions = {
     const alts = S.items.filter((i) => slotOf(i) === slot && i.id !== it.id && !o.itemIds.includes(i.id));
     openSheet(`${sheetTop('Keisti rūbą')}
       <div class="stack">
-        <div class="row" style="gap:14px">
-          <div style="width:84px;flex:none">${tileHTML(it, '', 'noop')}</div>
-          <div class="stack" style="gap:8px;flex:1">
+        <div class="swap-cur">
+          <div class="sc-ph">${it.image ? `<img src="${blobURL(it.image)}" alt="">` : ''}</div>
+          <div class="sc-info">
+            <span class="label">${esc(catById(it.category)?.label || '')} · dabar fite</span>
             <b>${esc(it.name || catById(it.category)?.label || 'Rūbas')}</b>
-            <button class="btn sm danger" data-act="ofit-remove" data-o="${o.id}" data-id="${it.id}">Išimti iš fito</button>
-            <button class="btn sm ghost" style="align-self:flex-start;padding-left:0" data-act="item" data-id="${it.id}">Rūbo kortelė →</button>
+            <div class="row" style="flex-wrap:wrap">
+              <button class="btn sm danger" data-act="ofit-remove" data-o="${o.id}" data-id="${it.id}">Išimti</button>
+              <button class="btn sm" data-act="item" data-id="${it.id}">Kortelė</button>
+            </div>
           </div>
         </div>
         <div class="section-head"><h3>Pakeisti į</h3><span class="label">${SLOTS[slot].label}</span></div>
@@ -1334,6 +1367,13 @@ const actions = {
     await afterOutfitEdit(o, 'Rūbas pridėtas');
   },
   noop() {},
+  onboard(el) {
+    startOnboarding(+el.dataset.v || 0);
+  },
+  coach() {
+    location.hash = '#fitas';
+    setTimeout(() => runCoach({ name: S.me.name, onDone: (go) => { if (go) location.hash = '#spinta'; } }), 300);
+  },
   'replace-photo'(el) {
     fileTarget = 'replace:' + el.dataset.id;
     fileInput.multiple = false;
@@ -1343,8 +1383,7 @@ const actions = {
     const it = itemById($('#itemForm').dataset.id);
     if (!it) return;
     if (!S.keyOk) return toast('Reikia DI rakto (skiltis „Daugiau“)');
-    el.disabled = true;
-    el.textContent = 'DI gražina… (~30 s)';
+    busyOn('DI gražina nuotrauką', 'apie 30 sekundžių');
     try {
       let out = await enhanceItemPhoto(it.image, it.name);
       // jei DI grąžino baltą foną – iškerpam nemokamai telefone
@@ -1361,13 +1400,13 @@ const actions = {
       it.image = await resize(out, 900, 'image/png');
       it.cutout = true;
       await db.put('items', it);
+      busyOff();
       toast('Pagražinta');
       openItem(it.id);
       rerender();
     } catch (e) {
+      busyOff();
       toast('Nepavyko: ' + e.message, 5000);
-      el.disabled = false;
-      el.textContent = 'Pagražinti su DI · ~0,10 $';
     }
   },
   async 'undo-enhance'() {
@@ -1531,6 +1570,7 @@ async function loadAll() {
   S.selfPhoto = await getSetting('selfPhoto');
   S.profile = { about: '', learned: [], ...((await getSetting('styleProfile')) || {}) };
   S.events = (await getSetting('styleEvents')) || [];
+  S.me = (await getSetting('me')) || {};
 }
 
 async function loadWeather() {
@@ -1543,10 +1583,31 @@ async function loadWeather() {
   }
 }
 
+function startOnboarding(startAt = 0) {
+  const first = !S.me.done;
+  runOnboarding({
+    me: S.me, startAt, canAI: S.keyOk, analyzeSelfie,
+    onSave: async (me) => {
+      S.me = me;
+      await setSetting('me', me);
+      await rerender();
+      if (first || !(await getSetting('coachDone'))) {
+        location.hash = '#fitas';
+        setTimeout(() => runCoach({
+          name: me.name,
+          onDone: async (go) => { await setSetting('coachDone', true); if (go) location.hash = '#spinta'; },
+        }), 350);
+      } else toast('Profilis atnaujintas');
+    },
+  });
+}
+
 async function init() {
   S.tab = location.hash.slice(1) || 'fitas';
+  startTipRotation();
   await loadAll();
   await render();
+  if (!S.me.done) startOnboarding(0);
   requestPersist();
   loadWeather();
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {

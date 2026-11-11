@@ -1,6 +1,6 @@
 // Offline režimas: pirmiausia bandom tinklą (kad atnaujinimai atsirastų iškart), jei nėra interneto – imam iš atminties.
-const CACHE = 'fitai-v4';
-const SHELL = ['./', 'index.html', 'css/app.css', 'js/app.js', 'js/db.js', 'js/data.js', 'js/ai.js', 'js/images.js', 'js/weather.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/apple-touch-icon.png'];
+const CACHE = 'fitai-v5';
+const SHELL = ['./', 'index.html', 'css/app.css', 'js/app.js', 'js/db.js', 'js/data.js', 'js/ai.js', 'js/images.js', 'js/weather.js', 'js/profile.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
