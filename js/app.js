@@ -1,7 +1,7 @@
 import { db, getSetting, setSetting, uid, requestPersist, exportAll, importAll, migrateBlobs } from './db.js';
 import { DEFAULT_CATEGORIES, GROUPS, SLOTS, SEASONS, OCCASIONS, VIBE_IDEAS } from './data.js';
 import { resize, removeBackground, lastCutBad, blobURL, transformImage, trimTransparent, autoEnhance } from './images.js';
-import { tagItem, styleOutfit, renderOutfit, chatAboutOutfit, enhanceItemPhoto, hasKey, testKey, modelsInUse, analyzeSelfie, analyzeBody, createAvatar } from './ai.js';
+import { tagItem, styleOutfit, renderOutfit, chatAboutOutfit, enhanceItemPhoto, hasKey, testKey, modelsInUse, analyzeSelfie, analyzeBody, createAvatar, aiCutout } from './ai.js';
 import { runOnboarding, runCoach, avatarSVG, avatarPNG, describeMe, bodyForAI, fLoader, startTipRotation, busyOn, busyOff, BODY_TYPES, BUILDS, SEASONS_C } from './profile.js';
 import { getWeather, weatherForAI, findCity } from './weather.js';
 
@@ -1110,6 +1110,7 @@ function openItem(id, fresh = false) {
           : `<button class="btn sm" style="flex:1" data-act="ai-enhance">Pagražinti su DI · ~0,10 $</button>`}
         ${it.prevImage ? `<button class="btn sm ghost" data-act="undo-enhance">Grąžinti ankstesnę</button>` : ''}
       </div>
+      ${S.keyOk ? `<button class="btn sm ${it.cutBad && !it.cutout ? 'primary' : ''}" data-act="ai-cut" ${S.enhancing.has(it.id) ? 'disabled' : ''}>${S.enhancing.has(it.id) ? 'DI dirba fone…' : 'Iškirpti foną su DI · ~0,04 $'}</button>` : ''}
       <div class="row">
         <button class="btn sm" style="flex:1" data-act="recut">${it.cutout ? 'Grąžinti originalą' : 'Iškirpti foną'}</button>
         <button class="btn sm danger" style="flex:1" data-act="del-item">Ištrinti</button>
@@ -1812,6 +1813,35 @@ const actions = {
       if ($('#itemForm')?.dataset.id === it.id) openItem(it.id);
     }
   },
+  async 'ai-cut'() {
+    const it = itemById($('#itemForm').dataset.id);
+    if (!it || S.enhancing.has(it.id)) return;
+    S.enhancing.add(it.id);
+    openItem(it.id);
+    toast('DI karpo foną – gali naršyti toliau', 3500);
+    try {
+      let out = await aiCutout(it.original || it.image, it.name);
+      // jei permatomumo negavom – iškerpam telefone iš DI rezultato
+      try {
+        const bm = await createImageBitmap(out);
+        const c = document.createElement('canvas');
+        c.width = 4; c.height = 4;
+        const x = c.getContext('2d');
+        x.drawImage(bm, 0, 0, 4, 4);
+        if (x.getImageData(0, 0, 1, 1).data[3] > 200) out = await removeBackground(out);
+      } catch (_) {}
+      out = await trimTransparent(out, 8);
+      const image = await resize(out, 900, 'image/png');
+      S.pendingEnh[it.id] = { image, warn: (await colorShift(it.original || it.image, image)) > 45, cut: true };
+      S.enhancing.delete(it.id);
+      if ($('#itemForm')?.dataset.id === it.id) openCompare(it.id);
+      else toast('Iškirpimas paruoštas', 9000, { label: 'Peržiūrėti', fn: () => openCompare(it.id) });
+    } catch (e) {
+      S.enhancing.delete(it.id);
+      toast('Nepavyko: ' + e.message, 6000);
+      if ($('#itemForm')?.dataset.id === it.id) openItem(it.id);
+    }
+  },
   'enh-compare'(el) {
     openCompare(el.dataset.id);
   },
@@ -1822,6 +1852,7 @@ const actions = {
     it.prevImage = it.image;
     it.image = p.image;
     it.cutout = true;
+    it.cutBad = false;
     delete S.pendingEnh[it.id];
     await db.put('items', it);
     toast('Išsaugota nauja nuotrauka');

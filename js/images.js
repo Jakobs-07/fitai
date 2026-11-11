@@ -64,29 +64,65 @@ export async function trimTransparent(blob, pad = 12) {
   return canvasToBlob(out, 'image/png');
 }
 
+// Stipresnis nemokamas modelis produktams: RMBG-1.4 (transformers.js, ~45 MB vieną kartą)
+const TF_LIB = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1';
+let rmbg = null;
+async function loadRMBG(onProgress) {
+  if (rmbg) return rmbg;
+  const tf = await import(TF_LIB);
+  tf.env.allowLocalModels = false;
+  const progress_callback = (p) => { if (onProgress && p.status === 'progress' && p.total) onProgress('Siunčiamas modelis', p.loaded / p.total); };
+  const model = await tf.AutoModel.from_pretrained('briaai/RMBG-1.4', { config: { model_type: 'custom' }, dtype: 'q8', progress_callback });
+  const processor = await tf.AutoProcessor.from_pretrained('briaai/RMBG-1.4', {
+    config: {
+      do_normalize: true, do_pad: false, do_rescale: true, do_resize: true, image_mean: [0.5, 0.5, 0.5],
+      feature_extractor_type: 'ImageFeatureExtractor', image_std: [1, 1, 1], resample: 2, rescale_factor: 0.00392156862745098,
+      size: { width: 1024, height: 1024 },
+    },
+  });
+  rmbg = { tf, model, processor };
+  return rmbg;
+}
+async function removeWithRMBG(blob, onProgress) {
+  const { tf, model, processor } = await loadRMBG(onProgress);
+  if (onProgress) onProgress('Karpoma', 0.5);
+  const url = URL.createObjectURL(blob);
+  try {
+    const image = await tf.RawImage.fromURL(url);
+    const { pixel_values } = await processor(image);
+    const { output } = await model({ input: pixel_values });
+    const mask = await tf.RawImage.fromTensor(output[0].mul(255).to('uint8')).resize(image.width, image.height);
+    const bm = await bitmap(blob);
+    const c = document.createElement('canvas');
+    c.width = image.width; c.height = image.height;
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(bm, 0, 0, c.width, c.height);
+    const id = ctx.getImageData(0, 0, c.width, c.height);
+    for (let i = 0; i < mask.data.length; i++) id.data[i * 4 + 3] = mask.data[i];
+    ctx.putImageData(id, 0, 0);
+    if (onProgress) onProgress('Karpoma', 1);
+    return canvasToBlob(c, 'image/png');
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 let bgModule;
 let bgWorkingModel = null;
 export let lastCutBad = false;
-export async function removeBackground(blob, onProgress) {
+async function removeWithImgly(blob, onProgress) {
   if (!bgModule) bgModule = await import(BG_LIB);
   const fn = bgModule.removeBackground || bgModule.default;
   const progress = (key, current, total) => {
     if (onProgress && total) onProgress(key.startsWith('fetch') ? 'Siunčiamas modelis' : 'Karpoma', current / total);
   };
-  // Pirmiausia tikslesnis modelis; jei telefonui per sunku – mažesnis.
   const models = bgWorkingModel ? [bgWorkingModel] : ['isnet_fp16', 'isnet_quint8'];
   let lastErr;
   for (const model of models) {
     try {
       const result = await fn(blob, { model, output: { format: 'image/png' }, progress });
       bgWorkingModel = model;
-      let clean = result;
-      cleanCutout.lastQuality = null;
-      try { clean = await cleanCutout(result); } catch (e) { console.warn('clean', e); }
-      const q = cleanCutout.lastQuality;
-      // jei rūbas suskilo į gabalus ar beveik dingo – laikom, kad iškirpti nepavyko
-      lastCutBad = !!q && (q.biggestShare < 0.7 || q.coverage < 0.06);
-      return trimTransparent(clean);
+      return result;
     } catch (e) {
       console.warn('bg model failed', model, e);
       lastErr = e;
@@ -95,87 +131,36 @@ export async function removeBackground(blob, onProgress) {
   throw lastErr;
 }
 
-// Mažas JPEG su baltu fonu – DI analizei (pigiau ir greičiau).
-export async function toDataURLForAI(blob, max = 512) {
-  const small = await resize(blob, max, 'image/jpeg', 0.8, '#ffffff');
-  return new Promise((res) => {
-    const r = new FileReader();
-    r.onload = () => res(r.result);
-    r.readAsDataURL(small);
-  });
+async function finishCut(result) {
+  let clean = result;
+  cleanCutout.lastQuality = null;
+  try { clean = await cleanCutout(result); } catch (e) { console.warn('clean', e); }
+  const q = cleanCutout.lastQuality;
+  // jei rūbas suskilo į gabalus ar beveik dingo – laikom, kad iškirpti nepavyko
+  return { blob: clean, bad: !!q && (q.biggestShare < 0.7 || q.coverage < 0.06) };
 }
 
-export async function toPngForAI(blob, max = 768) {
-  return resize(blob, max, 'image/png', 1, '#ffffff');
-}
-
-const urlCache = new WeakMap();
-export function blobURL(blob) {
-  if (!blob) return '';
-  let u = urlCache.get(blob);
-  if (!u) {
-    u = URL.createObjectURL(blob);
-    urlCache.set(blob, u);
+let rmbgBroken = false;
+export async function removeBackground(blob, onProgress) {
+  let res = null;
+  if (!rmbgBroken) {
+    try {
+      res = await finishCut(await removeWithRMBG(blob, onProgress));
+    } catch (e) {
+      console.warn('rmbg', e);
+      rmbgBroken = true; // šiame telefone neveikia – naudosim atsarginį
+    }
   }
-  return u;
-}
-
-// Pasukti / apversti nuotrauką. op: 'rotL' | 'rotR' | 'flipH'
-export async function transformImage(blob, op) {
-  const img = await bitmap(blob);
-  const rot = op === 'rotL' || op === 'rotR';
-  const c = document.createElement('canvas');
-  c.width = rot ? img.height : img.width;
-  c.height = rot ? img.width : img.height;
-  const ctx = c.getContext('2d');
-  ctx.translate(c.width / 2, c.height / 2);
-  if (op === 'rotR') ctx.rotate(Math.PI / 2);
-  if (op === 'rotL') ctx.rotate(-Math.PI / 2);
-  if (op === 'flipH') ctx.scale(-1, 1);
-  ctx.drawImage(img, -img.width / 2, -img.height / 2);
-  const type = blob.type === 'image/jpeg' ? 'image/jpeg' : 'image/png';
-  return canvasToBlob(c, type, 0.9);
-}
-
-// Nemokamas automatinis pataisymas: šviesa ir kontrastas pagal ryškumą (spalvų atspalvis nekeičiamas).
-export async function autoEnhance(blob, strength = 0.7) {
-  const img = await bitmap(blob);
-  const c = document.createElement('canvas');
-  c.width = img.width;
-  c.height = img.height;
-  const ctx = c.getContext('2d', { willReadFrequently: true });
-  ctx.drawImage(img, 0, 0);
-  const id = ctx.getImageData(0, 0, c.width, c.height);
-  const d = id.data;
-  const hist = new Uint32Array(256);
-  let n = 0;
-  for (let i = 0; i < d.length; i += 16) {
-    if (d[i + 3] < 128) continue;
-    hist[Math.round(0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2])]++;
-    n++;
+  if (!res || res.bad) {
+    try {
+      const alt = await finishCut(await removeWithImgly(blob, onProgress));
+      if (!res || !alt.bad) res = alt;
+    } catch (e) {
+      if (!res) throw e;
+    }
   }
-  if (n < 100) return blob;
-  const pct = (p) => { let acc = 0; for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= n * p) return v; } return 255; };
-  const lo = pct(0.01), hi = pct(0.99);
-  if (hi - lo < 20) return blob; // vienspalvis rūbas – neliečiam
-  // Šviesūs rūbai (pilkšvai nufotografuoti) pabaltinami, tamsūs paliekami beveik nepakeisti. Niekada netamsinam.
-  const hiT = hi >= 140 ? hi + (240 - hi) * 0.5 : hi * 1.1;
-  const gain = Math.min(1.35, (hiT - lo * 0.9) / Math.max(1, hi - lo));
-  const curve = new Float32Array(256);
-  for (let L = 0; L < 256; L++) {
-    const v = Math.max(L, Math.min(250, hiT - (hi - L) * gain));
-    curve[L] = L + (v - L) * strength;
-  }
-  for (let i = 0; i < d.length; i += 4) {
-    if (d[i + 3] === 0) continue;
-    const L = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-    const k = L > 1 ? curve[Math.round(L)] / L : 1;
-    d[i] = Math.min(255, d[i] * k);
-    d[i + 1] = Math.min(255, d[i + 1] * k);
-    d[i + 2] = Math.min(255, d[i + 2] * k);
-  }
-  ctx.putImageData(id, 0, 0);
-  return canvasToBlob(c, blob.type === 'image/jpeg' ? 'image/jpeg' : 'image/png', 0.9);
+  lastCutBad = res.bad;
+  return trimTransparent(res.blob);
 }
 
 // ---- Iškirpimo valymas: atplaišos (pakabos, siūlai), skylės viduje, dantyti kraštai ----
@@ -249,8 +234,11 @@ export async function cleanCutout(blob) {
   const { lab, sizes } = components(opened, w, h);
   const biggest = Math.max(0, ...sizes.slice(1));
   if (!biggest) return blob;
+  // vidutinis kiekvieno gabalo neperšviečiamumas: blyškios dėmės (popieriaus tekstūra, šešėliai) – ne rūbas
+  const asum = new Float64Array(sizes.length);
+  for (let i = 0; i < lab.length; i++) if (lab[i]) asum[lab[i]] += d[i * 4 + 3];
   const keepLab = new Uint8Array(sizes.length);
-  for (let k = 1; k < sizes.length; k++) keepLab[k] = sizes[k] >= biggest * 0.04 ? 1 : 0;
+  for (let k = 1; k < sizes.length; k++) keepLab[k] = sizes[k] >= biggest * 0.04 && (sizes[k] === biggest || asum[k] / sizes[k] > 150) ? 1 : 0;
   const keep = new Uint8Array(w * h);
   for (let i = 0; i < keep.length; i++) keep[i] = keepLab[lab[i]];
   // 3) užpildom mažas skyles rūbo viduje (pusiau permatomos vietos), didelius tarpus (tarp rankovės ir šono) paliekam
