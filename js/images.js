@@ -66,6 +66,7 @@ export async function trimTransparent(blob, pad = 12) {
 
 let bgModule;
 let bgWorkingModel = null;
+export let lastCutBad = false;
 export async function removeBackground(blob, onProgress) {
   if (!bgModule) bgModule = await import(BG_LIB);
   const fn = bgModule.removeBackground || bgModule.default;
@@ -80,7 +81,11 @@ export async function removeBackground(blob, onProgress) {
       const result = await fn(blob, { model, output: { format: 'image/png' }, progress });
       bgWorkingModel = model;
       let clean = result;
+      cleanCutout.lastQuality = null;
       try { clean = await cleanCutout(result); } catch (e) { console.warn('clean', e); }
+      const q = cleanCutout.lastQuality;
+      // jei rūbas suskilo į gabalus ar beveik dingo – laikom, kad iškirpti nepavyko
+      lastCutBad = !!q && (q.biggestShare < 0.7 || q.coverage < 0.06);
       return trimTransparent(clean);
     } catch (e) {
       console.warn('bg model failed', model, e);
@@ -237,7 +242,7 @@ export async function cleanCutout(blob) {
   const d = id.data;
   const r = Math.max(2, Math.round(Math.max(w, h) / 400)); // ~3 px 1200 px nuotraukai
   const solid = new Uint8Array(w * h);
-  for (let i = 0; i < solid.length; i++) solid[i] = d[i * 4 + 3] > 110 ? 1 : 0;
+  for (let i = 0; i < solid.length; i++) solid[i] = d[i * 4 + 3] > 24 ? 1 : 0;
   // 1) „atidarymas“: nuima plonas linijas (pakabos kabliukas, siūlai)
   const opened = maxFilter(minFilter(solid, w, h, r), w, h, r);
   // 2) paliekam tik didelius gabalus (rūbą), mažas dėmeles išmetam
@@ -259,12 +264,16 @@ export async function cleanCutout(blob) {
   }
   const near = maxFilter(keep, w, h, r + 1); // kraštai lieka
   const core = minFilter(keep, w, h, r + 1); // vidus – visiškai neperšviečiamas
+  // atsargiai: trinam tik tai, kas tikrai atplaiša; pusiau permatomų rūbo vietų neliečiam
+  let total = 0;
   for (let i = 0; i < keep.length; i++) {
     const a = i * 4 + 3;
-    if (!near[i]) d[a] = 0;
-    else if (core[i]) d[a] = 255;
-    else d[a] = d[a] < 40 ? 0 : d[a] > 215 ? 255 : d[a];
+    if (!near[i]) { if (solid[i]) d[a] = 0; continue; }
+    if (core[i] && d[a] > 60) d[a] = 255;
+    else if (d[a] > 215) d[a] = 255;
+    if (d[a] > 128) total++;
   }
+  cleanCutout.lastQuality = { biggestShare: biggest / Math.max(1, sizes.slice(1).reduce((x, y) => x + y, 0)), coverage: total / (w * h) };
   ctx.putImageData(id, 0, 0);
   return canvasToBlob(c, 'image/png');
 }

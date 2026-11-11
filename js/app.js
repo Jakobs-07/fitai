@@ -1,6 +1,6 @@
 import { db, getSetting, setSetting, uid, requestPersist, exportAll, importAll, migrateBlobs } from './db.js';
 import { DEFAULT_CATEGORIES, GROUPS, SLOTS, SEASONS, OCCASIONS, VIBE_IDEAS } from './data.js';
-import { resize, removeBackground, blobURL, transformImage, trimTransparent, autoEnhance } from './images.js';
+import { resize, removeBackground, lastCutBad, blobURL, transformImage, trimTransparent, autoEnhance } from './images.js';
 import { tagItem, styleOutfit, renderOutfit, chatAboutOutfit, enhanceItemPhoto, hasKey, testKey, modelsInUse, analyzeSelfie, analyzeBody, createAvatar } from './ai.js';
 import { runOnboarding, runCoach, avatarSVG, avatarPNG, describeMe, bodyForAI, fLoader, startTipRotation, busyOn, busyOff, BODY_TYPES, BUILDS, SEASONS_C } from './profile.js';
 import { getWeather, weatherForAI, findCity } from './weather.js';
@@ -889,7 +889,7 @@ fileInput.addEventListener('change', async () => {
       const original = await resize(files[0], 1400, 'image/jpeg', 0.85);
       let image = original, cutout = false;
       if (await getSetting('bgRemoval', true)) {
-        try { image = await resize(await removeBackground(original), 900, 'image/png'); cutout = true; } catch (e) { console.warn('bg', e); }
+        try { const cut = await removeBackground(original); if (!lastCutBad) { image = await resize(cut, 900, 'image/png'); cutout = true; } else toast('Fono gerai iškirpti nepavyko – palikta originali nuotrauka', 4500); } catch (e) { console.warn('bg', e); }
       }
       if (await getSetting('autoEnhance', true)) { try { image = await autoEnhance(image); } catch (_) {} }
       Object.assign(it, { image, original, cutout });
@@ -977,8 +977,7 @@ async function runQueue() {
         try {
           q.label = 'Karpomas fonas'; updateQueueTile(q);
           const cut = await removeBackground(original, (lab, p) => { q.label = lab; q.p = 0.1 + p * 0.6; updateQueueTile(q); });
-          image = await resize(cut, 900, 'image/png');
-          cutout = true;
+          if (lastCutBad) { q.cutBad = true; } else { image = await resize(cut, 900, 'image/png'); cutout = true; }
         } catch (e) {
           console.warn('bg', e);
           if (!bgFailedOnce) toast('Fono iškirpti nepavyko – paliekama originali nuotrauka');
@@ -991,7 +990,7 @@ async function runQueue() {
       }
       const item = {
         id: q.id, image, original, cutout, createdAt: Date.now(),
-        category: defaultCategory(), name: '', colors: [], seasons: [], occasions: [], warmth: 3, description: '',
+        category: defaultCategory(), name: '', colors: [], seasons: [], occasions: [], warmth: 3, description: '', cutBad: !!q.cutBad,
       };
       if (useKey) {
         q.label = 'DI atpažįsta'; q.p = 0.8; updateQueueTile(q);
@@ -1089,6 +1088,7 @@ function openItem(id, fresh = false) {
         <button data-act="light" aria-label="Šviesa"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8"/></svg><span>Šviesa</span></button>
         <button data-act="erase" aria-label="Trinti foną"><svg viewBox="0 0 24 24"><path d="M14.5 4.5 20 10 11 19H6.5L4 16.5z"/><path d="M9.5 9.5 15 15"/><path d="M11 19h9"/></svg><span>Trinti</span></button>
       </div>` : ''}
+      ${it.cutBad && !it.cutout ? `<div class="gap-note warn"><span class="label">Fonas neiškirptas</span>Šios nuotraukos fono automatiškai gerai iškirpti nepavyko, todėl palikta originali. Gali nutrinti foną trintuku.</div>` : ''}
       ${fresh ? `<div class="label center">${S.keyOk ? 'DI užpildė informaciją – pataisyk, jei reikia' : 'Užpildyk informaciją (su DI raktu tai vyksta automatiškai)'}</div>` : ''}
       <div class="field"><label>Pavadinimas</label><input class="input" name="name" value="${esc(it.name)}" placeholder="Balta lininė palaidinė"></div>
       <div class="field"><label>Kategorija</label><select class="input" name="category">${categorySelect(it.category)}</select></div>
@@ -1486,6 +1486,7 @@ const actions = {
       busyOn('Karpomas fonas', 'kelios sekundės');
       try {
         const cut = await removeBackground(it.original);
+        if (lastCutBad) { busyOff(); toast('Fono gerai iškirpti nepavyko – palikta originali nuotrauka. Gali nutrinti trintuku.', 5000); return; }
         it.image = await resize(cut, 900, 'image/png');
         it.cutout = true;
         busyOff();
