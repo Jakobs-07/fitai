@@ -47,14 +47,23 @@ async function discoverModel(kind) {
     pick = newest(imgs.filter((m) => !/mini/.test(m.id))) || newest(imgs);
   } else {
     const text = all.filter((m) => /^gpt-\d/.test(m.id) && !/(audio|realtime|image|search|transcribe|tts|codex|instruct|chat-latest)/.test(m.id));
-    pick = newest(text.filter((m) => /-mini$/.test(m.id))) || newest(text.filter((m) => /mini/.test(m.id))) || newest(text);
+    if (kind === 'chat') {
+      // naujausias pilnas modelis be datos priesagos (ne mini/nano/pro)
+      pick = newest(text.filter((m) => !/(mini|nano|pro|preview|\d{4}-\d{2}-\d{2})/.test(m.id))) || newest(text.filter((m) => /-mini$/.test(m.id)));
+    } else pick = newest(text.filter((m) => /-mini$/.test(m.id))) || newest(text.filter((m) => /mini/.test(m.id))) || newest(text);
   }
   if (!pick) throw new Error(kind === 'image' ? 'OpenAI neranda tinkamo vaizdų modelio šiam raktui.' : 'OpenAI neranda tinkamo teksto modelio šiam raktui.');
-  await setSetting(kind === 'image' ? 'autoImageModel' : 'autoTextModel', pick);
+  await setSetting(kind === 'image' ? 'autoImageModel' : kind === 'chat' ? 'autoChatModel' : 'autoTextModel', pick);
   return pick;
 }
 
 async function currentModel(kind) {
+  if (kind === 'chat') {
+    // pokalbiui – stipresnis (ne mini) modelis: geresnė lietuvių kalba. ~1 centas žinutei.
+    const m = (await getSetting('chatModel')) || (await getSetting('autoChatModel'));
+    if (m) return m;
+    try { return await discoverModel('chat'); } catch (_) { return currentModel('text'); }
+  }
   return kind === 'image'
     ? (await getSetting('imageModel')) || (await getSetting('autoImageModel')) || DEFAULT_IMAGE_MODEL
     : (await getSetting('textModel')) || (await getSetting('autoTextModel')) || DEFAULT_TEXT_MODEL;
@@ -66,7 +75,7 @@ async function withModel(kind, run) {
     return await run(await currentModel(kind));
   } catch (e) {
     if (!e.modelMissing) throw e;
-    await setSetting(kind === 'image' ? 'imageModel' : 'textModel', null); // rankinis nustatymas nebegalioja
+    await setSetting(kind === 'image' ? 'imageModel' : kind === 'chat' ? 'autoChatModel' : 'textModel', null); // nustatymas nebegalioja
     return run(await discoverModel(kind));
   }
 }
@@ -75,8 +84,8 @@ export async function modelsInUse() {
   return { text: await currentModel('text'), image: await currentModel('image') };
 }
 
-async function chatJSON(messages) {
-  const res = await withModel('text', async (model) => {
+async function chatJSON(messages, kind = 'text') {
+  const res = await withModel(kind, async (model) => {
     const r = await fetch(`${API}/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await key()}` },
@@ -137,7 +146,8 @@ const STYLIST =
   'SVARBIAUSIA – jos stiliaus profilis (jos_stilius): ką ji pati apie save parašė, ką tu apie ją išmokai, ' +
   'kokie fitai jai patiko, kuriuos atmetė ir ką pati keitė. Derink prie jos skonio, nekartok to, kas jai nepatiko. ' +
   'ORAI: jei šalta, vėjuota ar lyja – pirmiausia sluoksniuok iš to, kas yra (megztinis po švarku, marškiniai po megztiniu, pėdkelnės po kelnėmis ar sijonu, šiltesni batai). ' +
-  'Jei spintoje tikrai trūksta tinkamo rūbo orams (pvz. nėra šiltos striukės ar uždarų batų), švelniai ir trumpai pasakyk tai lauke "gap", be priekaištų. ' +
+  'KALBA: rašyk taisyklinga, paprasta lietuvių kalba, trumpais aiškiais sakiniais. Nekurk naujų žodžių, nemaišyk angliškų žodžių, nevartok techninių terminų ar laukų pavadinimų. ' +
+  'Minėk tik tuos rūbus, kurie tikrai yra spintoje, ir vadink juos jų pavadinimais. Nesiprieštarauk sau. ' +
   'Atsižvelk į jos figūrą ir spalvų tipą (jos_figura_ir_spalvos) – rinkis jai palankius siluetus ir spalvas prie veido, bet jos skonis svarbiau už taisykles. ';
 
 function profileFor(style) {
@@ -182,7 +192,7 @@ export async function styleOutfit({ vibe, items, categories, weather, wearStats,
         STYLIST +
         'Atsakyk TIK JSON: {"title": "trumpas žaismingas pavadinimas", "itemIds": [...], ' +
         '"explanation": "2–3 sakiniai kodėl šis derinys", "tip": "1 stiliaus patarimas (pvz. kaip susegti, kokį makiažą)", ' +
-        '"gap": "" arba trumpai, ko spintoje trūksta šiems orams/progai}. ' +
+        '"gap": "" arba vienu trumpu sakiniu, ko spintoje tikrai trūksta šiems orams ar progai (be priekaištų)}. ' +
         'Jei spintoje trūksta būtinų rūbų, vis tiek pasiūlyk geriausią įmanomą. Rūbus iš "butinai_itraukti" privalai įtraukti.',
     },
     {
@@ -206,7 +216,7 @@ export async function styleOutfit({ vibe, items, categories, weather, wearStats,
 }
 
 // ---- Vaizdas "ant manekeno" arba "ant manęs" ----
-export async function renderOutfit({ items, categories, mode, selfPhoto, notes = '', bodyDesc = '', bodyRef = null }) {
+export async function renderOutfit({ items, categories, mode, selfPhoto, notes = '', bodyDesc = '', bodyRef = null, avatar = null }) {
   const catById = Object.fromEntries(categories.map((c) => [c.id, c]));
   const fd = new FormData();
   let idx = 1;
@@ -215,6 +225,9 @@ export async function renderOutfit({ items, categories, mode, selfPhoto, notes =
   if (mode === 'me') {
     if (!selfPhoto) throw new Error('NO_SELF');
     fd.append('image[]', await toPngForAI(selfPhoto, 1024), 'person.png');
+    idx = 2;
+  } else if (avatar) {
+    fd.append('image[]', await toPngForAI(avatar, 1024), 'mannequin.png');
     idx = 2;
   } else if (bodyRef) {
     fd.append('image[]', bodyRef, 'body.png');
@@ -244,6 +257,12 @@ export async function renderOutfit({ items, categories, mode, selfPhoto, notes =
       'Reproduce every garment faithfully: same color, pattern, texture, cut and details. ' +
       'Full body, standing, natural relaxed pose, head to toe visible, plain warm beige studio background, ' +
       'soft natural light, high-end editorial look.\n' + garments;
+  } else if (avatar) {
+    prompt =
+      'Realistic fashion e-commerce photo. Image 1 is the client\'s personal mannequin. Use THIS EXACT mannequin: keep its body shape, ' +
+      'proportions, height-to-width ratio, shoulder, bust, waist and hip widths, leg and torso length, pose, camera framing and background exactly the same. ' +
+      'Do NOT slim, lengthen or idealize it. Dress it in EXACTLY the clothing items from the other images, combined as one outfit, ' +
+      'replacing the bodysuit. Reproduce every garment faithfully: same color, pattern, texture, cut and details.\n' + garments;
   } else {
     prompt =
       'Realistic fashion e-commerce photo of a neutral, faceless matte white female mannequin, full body, head to toe, ' +
@@ -294,7 +313,7 @@ export async function renderOutfit({ items, categories, mode, selfPhoto, notes =
       return await send(model, true);
     } catch (e) {
       // naujesni modeliai gali nepriimti dydžio/kokybės parametrų – bandome be jų
-      if (!e.modelMissing && /size|quality|parameter/i.test(e.message)) return send(model, false);
+      if (!e.modelMissing && /size|quality|parameter|fidelity/i.test(e.message)) return send(model, false);
       throw e;
     }
   });
@@ -324,7 +343,7 @@ export async function chatAboutOutfit({ outfit, message, items, categories, weat
         STYLIST +
         'Dabar kalbiesi su klientė apie jau sudarytą fitą. Ji gali klausti, prašyti pakeitimų ar naujos idėjos. ' +
         'Jei prašo pakeisti – pakeisk tik tai, ko reikia, likusius rūbus palik. Jei tik klausia – atsakyk ir nieko nekeisk. ' +
-        'Atsakymas trumpas: 1–3 sakiniai. Niekada neminėk techninių dalykų (id, itemIds, JSON, sąrašų) – kalbėk tik apie rūbus. ' +
+        'Atsakyk tiksliai į jos klausimą. Atsakymas trumpas: 1–3 sakiniai. Niekada neminėk techninių dalykų (id, itemIds, JSON, sąrašų) – kalbėk tik apie rūbus. ' +
         'Programėlė moka generuoti fito vaizdą: "mannequin" (ant manekeno) arba "me" (ant jos pačios nuotraukos). ' +
         'Jei ji prašo sukurti, pataisyti ar pergeneruoti vaizdą – nustatyk "render" ir NEDELSK, nepaklausk dar kartą. ' +
         'Jei pageidauja kažko konkretaus vaizde (pvz. be batų, kita poza, kitas fonas) – įrašyk tai į "imageNotes" angliškai, trumpai; ' +
@@ -344,7 +363,10 @@ export async function chatAboutOutfit({ outfit, message, items, categories, weat
         data: new Date().toISOString().slice(0, 10),
         orai: weather || 'nežinomi',
         pradinis_noras: outfit.vibe || '',
-        dabartinis_fitas: { pavadinimas: outfit.title, itemIds: outfit.itemIds },
+        dabartinis_fitas: {
+          pavadinimas: outfit.title,
+          rubai: outfit.itemIds.map((id) => { const it = items.find((i) => i.id === id); const c = it && categories.find((x) => x.id === it.category); return { id, pavadinimas: it?.name || '', kategorija: c?.label || '' }; }),
+        },
         jau_sugeneruoti_vaizdai: Object.keys(outfit.renders || {}),
         esamos_vaizdo_pastabos: outfit.imageNotes || '',
         jos_stilius: profileFor(style),
@@ -354,7 +376,7 @@ export async function chatAboutOutfit({ outfit, message, items, categories, weat
     { role: 'assistant', content: JSON.stringify({ reply: 'Supratau, matau spintą ir dabartinį fitą.' }) },
     ...history,
     { role: 'user', content: message },
-  ]);
+  ], 'chat');
   const valid = new Set(items.map((i) => i.id));
   out.itemIds = (out.itemIds || []).filter((id) => valid.has(id));
   if (!out.itemIds.length) out.changed = false;
@@ -421,4 +443,61 @@ export async function analyzeSelfie(blob) {
       ],
     },
   ]);
+}
+
+// ---- Figūra ir spalvos iš nuotraukos visu ūgiu ----
+export async function analyzeBody(blob) {
+  const img = await toDataURLForAI(blob, 1024);
+  return chatJSON([
+    { role: 'system', content: 'You are a professional stylist and color analyst. Analyse the woman in the full-body photo kindly and objectively. Return ONLY JSON.' },
+    {
+      role: 'user',
+      content: [
+        {
+          type: 'text',
+          text:
+            'Return JSON: {"bodyType": one of hourglass (shoulders≈hips, clearly defined waist), pear (hips wider than shoulders), ' +
+            'apple (fuller midsection, little waist definition), rectangle (shoulders, waist, hips similar), invtri (shoulders wider than hips), ' +
+            '"build": one of slim, medium, full, "skin": s1 (very light) | s2 (light) | s3 (medium) | s4 (olive/tan) | s5 (dark), ' +
+            '"hair": blond | lbrown | dbrown | black | red | grey, "eyes": blue | green | hazel | brown, "undertone": warm | cool | neutral, ' +
+            '"season": spring | summer | autumn | winter}. Judge proportions from the silhouette, ignore loose clothing as much as possible.',
+        },
+        { type: 'image_url', image_url: { url: img, detail: 'high' } },
+      ],
+    },
+  ]);
+}
+
+// ---- Asmeninis manekenas iš jos nuotraukos ----
+export async function createAvatar(photo) {
+  const fd = new FormData();
+  fd.append('image[]', await toPngForAI(photo, 1024), 'person.png');
+  fd.append('prompt',
+    'Create a realistic full-body studio photo of a faceless, smooth matte white fashion mannequin that has EXACTLY the same body as the woman in the image: ' +
+    'identical height-to-width ratio, shoulder width, bust, waist, hips, thighs, leg length, torso length, arm length and overall build. ' +
+    'Do NOT slim, lengthen, idealize or change the figure in any way – it must be a faithful 1:1 body double. ' +
+    'No face, no hair, no skin texture. The mannequin wears only a plain, thin, fitted nude-beige bodysuit so the shape is visible. ' +
+    'Neutral standing pose, front view, feet flat on the floor, arms relaxed slightly away from the body. ' +
+    'Head to toe fully in frame with a little space above and below, centered, plain warm beige studio background, soft even light.');
+  fd.append('n', '1');
+  const send = async (model, extras) => {
+    const body = new FormData();
+    for (const [k, v] of fd.entries()) body.append(k, v);
+    body.append('model', model);
+    if (extras) { body.append('size', '1024x1536'); body.append('quality', 'medium'); body.append('input_fidelity', 'high'); }
+    const r = await fetch(`${API}/images/edits`, { method: 'POST', headers: { Authorization: `Bearer ${await key()}` }, body });
+    if (!r.ok) await fail(r);
+    return r;
+  };
+  const res = await withModel('image', async (model) => {
+    try { return await send(model, true); } catch (e) {
+      if (!e.modelMissing && /size|quality|parameter|fidelity/i.test(e.message)) return send(model, false);
+      throw e;
+    }
+  });
+  const j = await res.json();
+  const b64 = j.data?.[0]?.b64_json;
+  if (b64) return (await fetch(`data:image/png;base64,${b64}`)).blob();
+  if (j.data?.[0]?.url) return (await fetch(j.data[0].url)).blob();
+  throw new Error('Manekeno sukurti nepavyko.');
 }

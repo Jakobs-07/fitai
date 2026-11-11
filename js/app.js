@@ -1,7 +1,7 @@
 import { db, getSetting, setSetting, uid, requestPersist, exportAll, importAll, migrateBlobs } from './db.js';
 import { DEFAULT_CATEGORIES, GROUPS, SLOTS, SEASONS, OCCASIONS, VIBE_IDEAS } from './data.js';
 import { resize, removeBackground, blobURL, transformImage, trimTransparent, autoEnhance } from './images.js';
-import { tagItem, styleOutfit, renderOutfit, chatAboutOutfit, enhanceItemPhoto, hasKey, testKey, modelsInUse, analyzeSelfie } from './ai.js';
+import { tagItem, styleOutfit, renderOutfit, chatAboutOutfit, enhanceItemPhoto, hasKey, testKey, modelsInUse, analyzeSelfie, analyzeBody, createAvatar } from './ai.js';
 import { runOnboarding, runCoach, avatarSVG, avatarPNG, describeMe, bodyForAI, fLoader, startTipRotation, busyOn, busyOff, BODY_TYPES, BUILDS, SEASONS_C } from './profile.js';
 import { getWeather, weatherForAI, findCity } from './weather.js';
 
@@ -183,7 +183,7 @@ function outfitCardHTML(o) {
       const isMe = tab === 'me';
       const needSelf = isMe && !S.selfPhoto;
       visual = `<div class="render-box"><div class="loading">
-        ${!isMe && S.me.done ? avatarSVG(S.me, { cls: 'rb-av', silhouette: false }) : ''}
+        ${!isMe && S.me.avatarImg ? `<img class="rb-av" src="${blobURL(S.me.avatarImg)}" alt="">` : !isMe && S.me.done ? avatarSVG(S.me, { cls: 'rb-av', silhouette: false }) : ''}
         <span class="serif">${needSelf ? 'Reikia tavo nuotraukos' : isMe ? 'Kaip atrodytų ant tavęs?' : S.me.done ? 'Manekenas tavo figūros' : 'Pažiūrėk ant manekeno'}</span>
         <span class="label">${needSelf ? 'Įkelk ją skiltyje „Daugiau“' : 'Kaina ~0,05–0,20 $'}</span>
         ${needSelf ? `<a class="btn sm" href="#nustatymai">Įkelti nuotrauką</a>` : `<button class="btn primary sm" data-act="render" data-mode="${tab}">Sugeneruoti vaizdą</button>`}
@@ -457,8 +457,9 @@ async function doRender(o, mode) {
   try {
     const items = o.itemIds.map(itemById).filter(Boolean);
     let bodyRef = null;
-    if (mode === 'mannequin' && S.me.done) { try { bodyRef = await avatarPNG(S.me); } catch (e) { console.warn('avatar', e); } }
-    const blob = await renderOutfit({ items, categories: S.categories, mode, selfPhoto: S.selfPhoto, notes: o.imageNotes || '', bodyDesc: bodyForAI(S.me), bodyRef });
+    const avatar = mode === 'mannequin' && S.me.avatarImg ? S.me.avatarImg : null;
+    if (mode === 'mannequin' && S.me.done && !avatar) { try { bodyRef = await avatarPNG(S.me); } catch (e) { console.warn('avatar', e); } }
+    const blob = await renderOutfit({ items, categories: S.categories, mode, selfPhoto: S.selfPhoto, notes: o.imageNotes || '', bodyDesc: bodyForAI(S.me), bodyRef, avatar });
     o.renders = { ...(o.renders || {}), [mode]: blob };
     await saveOutfit(o);
     const card = document.querySelector('.outfit-card .seg');
@@ -713,17 +714,17 @@ function profileCardHTML() {
   const me = S.me;
   if (!me.done) {
     return `<div class="card panel-sand set-block">${setHead('—', 'Mano profilis', 'Figūra, spalvos ir avataras')}
-      <button class="btn primary" data-act="onboard" data-v="1">Susikurti profilį</button></div>`;
+      <button class="btn primary" data-act="onboard" data-v="name">Susikurti profilį</button></div>`;
   }
   const bt = BODY_TYPES.find((b) => b.id === me.bodyType);
   const se = SEASONS_C[me.season];
-  return `<div class="card set-block">${setHead('—', me.name ? esc(me.name) : 'Mano profilis', 'Pagal tai piešiamas manekenas ir parenkami deriniai')}
-    <div class="prof-row">${avatarSVG(me, { cls: 'prof-av' })}
+  return `<div class="card set-block prof-card">${setHead('—', me.name ? esc(me.name) : 'Mano profilis', 'Pagal tai kuriamas manekenas ir parenkami deriniai')}
+    <div class="prof-row" data-act="onboard" data-v="avatar">${me.avatarImg ? `<img class="prof-av av-img" src="${blobURL(me.avatarImg)}" alt="">` : avatarSVG(me, { cls: 'prof-av' })}
       <dl class="av-facts"><dt>Ūgis</dt><dd>${me.height} cm</dd><dt>Sudėjimas</dt><dd>${BUILDS.find((b) => b.id === me.build)?.label || '—'}</dd>
       <dt>Figūra</dt><dd>${bt ? bt.label : '—'}</dd><dt>Spalvos</dt><dd>${se ? se.label : '—'}</dd>${me.styles?.length ? `<dt>Stilius</dt><dd>${esc(me.styles.slice(0, 3).join(', '))}</dd>` : ''}</dl></div>
     ${se ? `<div class="palette">${se.good.map(([n, hex]) => `<span><i style="background:${hex}"></i>${n}</span>`).join('')}</div>` : ''}
     ${bt ? `<div class="tip" style="margin-top:0"><span class="label">Tavo figūrai</span>${bt.tip}</div>` : ''}
-    <div class="row"><button class="btn sm" style="flex:1" data-act="onboard" data-v="1">Redaguoti</button><button class="btn sm" style="flex:1" data-act="coach">Rodyti gidą</button></div>
+    <div class="row"><button class="btn sm" style="flex:1" data-act="onboard" data-v="avatar">Redaguoti</button><button class="btn sm" style="flex:1" data-act="coach">Rodyti gidą</button></div>
   </div>`;
 }
 
@@ -1767,11 +1768,10 @@ const actions = {
     if (S.tab === 'spinta') { const y = window.scrollY; view.innerHTML = await viewSpinta(); window.scrollTo(0, y); }
   },
   onboard(el) {
-    startOnboarding(+el.dataset.v || 0);
+    startOnboarding(el.dataset.v || 0);
   },
   coach() {
-    location.hash = '#fitas';
-    setTimeout(() => runCoach({ name: S.me.name, onDone: (go) => { if (go) location.hash = '#spinta'; } }), 300);
+    startCoach();
   },
   'replace-photo'(el) {
     fileTarget = 'replace:' + el.dataset.id;
@@ -2014,19 +2014,29 @@ async function loadWeather() {
 function startOnboarding(startAt = 0) {
   const first = !S.me.done;
   runOnboarding({
-    me: S.me, startAt, canAI: S.keyOk, analyzeSelfie,
+    me: S.me, startAt, canAI: S.keyOk,
+    ai: { analyzeSelfie, analyzeBody, createAvatar, prepPhoto: (f) => resize(f, 1400, 'image/jpeg', 0.88) },
     onSave: async (me) => {
       S.me = me;
       await setSetting('me', me);
+      if (me.photo && me.photo !== S.selfPhoto) { S.selfPhoto = me.photo; await setSetting('selfPhoto', me.photo); }
       await rerender();
       if (first || !(await getSetting('coachDone'))) {
-        location.hash = '#fitas';
-        setTimeout(() => runCoach({
-          name: me.name,
-          onDone: async (go) => { await setSetting('coachDone', true); if (go) location.hash = '#spinta'; },
-        }), 350);
+        setTimeout(() => startCoach(true), 350);
       } else toast('Profilis atnaujintas');
     },
+  });
+}
+
+function startCoach(first = false) {
+  runCoach({
+    name: S.me.name,
+    go: async (tab) => {
+      if (S.tab === tab) return;
+      location.hash = '#' + tab;
+      await new Promise((r) => setTimeout(r, 400));
+    },
+    onDone: async (go) => { await setSetting('coachDone', true); if (go) location.hash = '#spinta'; },
   });
 }
 

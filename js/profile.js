@@ -66,7 +66,18 @@ export const SEASONS_C = {
     avoid: 'kupranugario, oranžinė, prislopintos žemiškos spalvos' },
 };
 
-export const STYLES = ['Minimalistinis', 'Klasikinis', 'Romantiškas', 'Gatvės', 'Boho', 'Sportiškas', 'Elegantiškas', 'Eklektiškas', 'Skandinaviškas', 'Vintažinis'];
+export const STYLES = [
+  { id: 'Minimalistinis', img: 'minimal', desc: 'Švarios linijos, neutralios spalvos, mažai detalių' },
+  { id: 'Klasikinis', img: 'classic', desc: 'Lietpalčiai, švarkai, laiko patikrinti dalykai' },
+  { id: 'Romantiškas', img: 'romantic', desc: 'Gėlėti raštai, raukiniai, minkšti audiniai' },
+  { id: 'Gatvės', img: 'street', desc: 'Laisvi kirpimai, sportbačiai, kepurės' },
+  { id: 'Boho', img: 'boho', desc: 'Ilgos plevenančios suknelės, natūralūs audiniai' },
+  { id: 'Sportiškas', img: 'sporty', desc: 'Patogūs, judesiui skirti rūbai kasdienai' },
+  { id: 'Elegantiškas', img: 'elegant', desc: 'Prigludę siluetai, vakaro deriniai' },
+  { id: 'Drąsus mišinys', img: 'eclectic', desc: 'Netikėti spalvų ir raštų deriniai' },
+  { id: 'Skandinaviškas', img: 'scandi', desc: 'Paprasta, jauku, sluoksniai, dryžiai' },
+  { id: 'Vintažinis', img: 'vintage', desc: 'Senų laikų įkvėpti kirpimai ir raštai' },
+];
 
 export function guessSeason({ undertone, hair, eyes, skin }) {
   const lightHair = ['blond', 'lbrown', 'grey'].includes(hair);
@@ -263,31 +274,63 @@ export function busyOff() {
 
 // ---------- Pasitikimas ir profilio kūrimas ----------
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const STEPS = ['welcome', 'name', 'photo', 'size', 'body', 'colors', 'styles', 'avatar'];
 
-export function runOnboarding({ me = {}, startAt = 0, canAI = false, analyzeSelfie = null, onSave }) {
+function pickPhoto() {
+  return new Promise((res) => {
+    const inp = document.createElement('input');
+    inp.type = 'file';
+    inp.accept = 'image/*';
+    inp.onchange = () => res(inp.files[0] || null);
+    inp.click();
+  });
+}
+
+const BUILD_HELP = {
+  slim: 'Siauri pečiai ir klubai, ploni riešai ir kulkšnys, rūbai dažnai būna laisvoki.',
+  medium: 'Nei labai liekna, nei apvali – dažniausiai tinka standartiniai dydžiai.',
+  full: 'Minkštesnės, pilnesnės formos – krūtinė, klubai ar pilvas apvalesni.',
+};
+
+export function runOnboarding({ me = {}, startAt = 0, canAI = false, ai = {}, onSave }) {
   const d = { height: 165, build: 'medium', bodyType: '', skin: 's2', hair: 'dbrown', eyes: '', undertone: '', styles: [], name: '', ...me };
-  let step = startAt;
+  let step = typeof startAt === 'string' ? Math.max(0, STEPS.indexOf(startAt)) : startAt;
   let quiz = null;
   let drawn = null;
-  const STEPS = ['welcome', 'name', 'size', 'body', 'colors', 'styles', 'avatar'];
+  let editReturn = false;
+  let avatarErr = '';
   const el = document.createElement('div');
   el.className = 'onb';
   document.body.appendChild(el);
   document.body.style.overflow = 'hidden';
 
-  const progress = () => step === 0 ? '' : `<div class="onb-prog">${STEPS.slice(1).map((_, i) => `<i class="${i < step ? 'on' : ''}"></i>`).join('')}</div>`;
-  const top = () => step === 0 ? '' : `<div class="onb-top"><button class="x" data-o="back">${step > (startAt || 1) ? '← Atgal' : ''}</button>${progress()}<span class="label">${step}/${STEPS.length - 1}</span></div>`;
+  const last = STEPS.length - 1;
+  const progress = () => `<div class="onb-prog">${STEPS.slice(1).map((_, i) => `<i class="${i < step ? 'on' : ''}"></i>`).join('')}</div>`;
+  const top = () => step === 0 ? '' : `<div class="onb-top"><button class="x" data-o="back">${editReturn ? '← Atgal' : step > 1 ? '← Atgal' : ''}</button>${progress()}<span class="label">${step}/${last}</span></div>`;
+
+  function avatarVisual(cls) {
+    if (d.avatarImg) return `<img class="${cls} av-img" src="${URL.createObjectURL(d.avatarImg)}" alt="Tavo manekenas">`;
+    if (d._avatarP) return `<div class="${cls} av-wait">${F_SVG}<span class="label">Kuriamas tavo manekenas…</span></div>`;
+    return avatarSVG(d, { cls, ruler: false });
+  }
 
   function screen() {
     const s = STEPS[step];
     if (s === 'welcome') {
       return `<div class="onb-welcome">
         <div class="ow-brand">Fitai<em>.</em></div>
-        <div class="ow-fig">${avatarSVG({ ...d, bodyType: 'hourglass' }, { cls: 'ow-av' })}</div>
+        <div class="ow-collage">
+          <figure class="c1"><img src="img/wc-1.jpg" alt=""></figure>
+          <figure class="c2"><img src="img/st-minimal.jpg" alt=""></figure>
+          <figure class="c3"><img src="img/wc-2.jpg" alt=""></figure>
+          <figure class="c4"><img src="img/st-romantic.jpg" alt=""></figure>
+          <figure class="c5"><img src="img/wc-3.jpg" alt=""></figure>
+          <span class="ow-stamp serif">Nº 01</span>
+        </div>
         <div class="ow-title">Tavo spinta.<br><em>Tavo stilistė.</em></div>
         <p class="ow-sub">Įkelk savo rūbus, o Fitai kasdien pasiūlys, ką vilkėti – pagal orus, nuotaiką ir tavo figūrą.</p>
         <button class="btn primary block" data-o="next">Susikurti profilį</button>
-        <span class="label center">Užtruks apie 2 minutes · viskas lieka tavo telefone</span>
+        <span class="label center">Užtruks apie 3 minutes · viskas lieka tavo telefone</span>
       </div>`;
     }
     if (s === 'name') {
@@ -295,13 +338,35 @@ export function runOnboarding({ me = {}, startAt = 0, canAI = false, analyzeSelf
         <input class="input onb-big" id="obName" autocomplete="given-name" placeholder="Tavo vardas" value="${esc(d.name)}">
         <p class="small muted">Taip į tave kreipsis stilistė.</p>`;
     }
+    if (s === 'photo') {
+      return `<div class="onb-q"><span class="label">Tavo manekenas</span><h2>Nuotrauka<br><em>visu ūgiu</em></h2></div>
+        <p class="small" style="margin:0">Iš jos ${canAI ? 'DI nustatys tavo figūrą, spalvas ir sukurs <b>tavo pačios proporcijų manekeną</b>, ant kurio matysi derinius' : 'bus kuriami vaizdai „Ant manęs“'}.</p>
+        <div class="ex-row">
+          <figure class="ex-ph"><img src="img/ex-fullbody.jpg" alt="Pavyzdys"><figcaption class="label">Pavyzdys</figcaption></figure>
+          <ul class="ex-list">
+            <li><b>Visu ūgiu</b> – nuo galvos iki pėdų</li>
+            <li><b>Stovėk tiesiai</b>, veidu į kamerą, rankos šiek tiek atitrauktos</li>
+            <li><b>Prigludę rūbai</b> – džinsai, marškinėliai, ne platūs paltai</li>
+            <li><b>Paprastas fonas</b> – siena ar durys</li>
+            <li><b>Telefonas juosmens aukštyje</b>, tiesiai, kad nebūtų iškraipymo – geriausia kas nors nufotografuoja</li>
+            <li><b>Dienos šviesa</b> iš priekio</li>
+          </ul>
+        </div>
+        ${d.photo ? `<div class="ph-done"><img src="${URL.createObjectURL(d.photo)}" alt=""><div><span class="label">Įkelta</span><p class="small" style="margin:4px 0 8px">${d.fromPhoto ? 'Figūra ir spalvos nustatytos – kitame žingsnyje galėsi pataisyti.' : canAI ? '' : 'DI neįjungtas – figūrą pasirinksi pati.'}</p>
+          <button class="btn sm" data-o="photo">Pakeisti</button></div></div>`
+          : `<button class="btn primary block" data-o="photo">Įkelti nuotrauką${canAI ? ' · DI ~0,20 $' : ''}</button>`}
+        <p class="small muted" style="margin:0">Nuotrauka saugoma tik telefone. Į OpenAI siunčiama tik analizei ir manekenui sukurti.</p>`;
+    }
     if (s === 'size') {
       return `<div class="onb-q"><span class="label">Tavo figūra</span><h2>Ūgis ir<br><em>sudėjimas</em></h2></div>
+        ${d.fromPhoto ? `<div class="ai-note">Sudėjimas nustatytas iš nuotraukos. Ūgį įrašyk pati – iš nuotraukos jo tiksliai nustatyti neįmanoma.</div>` : ''}
         <div class="onb-height"><span class="oh-val"><b id="obHval">${d.height}</b> cm</span>
-          <input type="range" id="obH" min="145" max="195" value="${d.height}"></div>
-        <div class="onb-cards three">${BUILDS.map((b) => `<button class="ocard ${d.build === b.id ? 'on' : ''}" data-o="build" data-v="${b.id}">
-          ${avatarSVG({ ...d, build: b.id, bodyType: d.bodyType || 'rectangle', height: 165 }, { cls: 'oc-av' })}<span>${b.label}</span></button>`).join('')}</div>
-        <p class="small muted">Pagal tai piešiamas tavo avataras ir manekenas, ant kurio matysi derinius.</p>`;
+          <input type="range" id="obH" min="140" max="195" value="${d.height}"></div>
+        <div class="field"><label>Sudėjimas – kaip apskritai atrodo kūnas</label></div>
+        <div class="build-list">${BUILDS.map((b) => `<button class="bcard ${d.build === b.id ? 'on' : ''}" data-o="build" data-v="${b.id}">
+          ${avatarSVG({ ...d, build: b.id, bodyType: d.bodyType || 'rectangle', height: 165 }, { cls: 'bc-av' })}
+          <span class="bc-t"><b>${b.label}</b><small>${BUILD_HELP[b.id]}</small></span></button>`).join('')}</div>
+        ${!d.photo && canAI ? `<button class="btn sm ghost" style="align-self:flex-start;padding-left:0" data-o="goto" data-v="photo">Nežinai? Nustatyk iš nuotraukos →</button>` : ''}`;
     }
     if (s === 'body') {
       if (quiz) {
@@ -312,40 +377,67 @@ export function runOnboarding({ me = {}, startAt = 0, canAI = false, analyzeSelf
           <button class="btn sm ghost" style="align-self:flex-start;padding-left:0" data-o="quiz-off">← Rinksiuosi pati</button>`;
       }
       return `<div class="onb-q"><span class="label">Kūno tipas</span><h2>Kuri figūra<br><em>panašiausia?</em></h2></div>
+        ${d.fromPhoto ? `<div class="ai-note">Pažymėta pagal tavo nuotrauką – pataisyk, jei nesutinki.</div>` : ''}
         <div class="onb-cards">${BODY_TYPES.map((b) => `<button class="ocard ${d.bodyType === b.id ? 'on' : ''}" data-o="body" data-v="${b.id}">
           ${avatarSVG({ ...d, bodyType: b.id }, { cls: 'oc-av' })}<span>${b.label}</span><small>${b.short}</small></button>`).join('')}
           <button class="ocard help" data-o="quiz-on"><span class="serif" style="font-size:34px;color:var(--wine)">?</span><span>Nežinau</span><small>padėk nustatyti</small></button></div>
         ${d.bodyType ? `<div class="tip"><span class="label">Kas tau tinka</span>${BODY_TYPES.find((b) => b.id === d.bodyType).tip}</div>` : ''}`;
     }
     if (s === 'colors') {
-      const season = d.eyes && d.undertone ? guessSeason(d) : null;
+      const season = d.eyes && d.undertone ? d.seasonAI || guessSeason(d) : null;
       const se = season && SEASONS_C[season];
       return `<div class="onb-q"><span class="label">Spalvų tipas</span><h2>Kokios spalvos<br><em>tau tinka?</em></h2></div>
-        <div class="field"><label>Odos atspalvis</label><div class="swatches">${SKINS.map((x) => `<button class="sw ${d.skin === x.id ? 'on' : ''}" style="background:${x.hex}" data-o="set" data-k="skin" data-v="${x.id}" aria-label="${x.label}"></button>`).join('')}</div></div>
+        ${d.fromPhoto ? `<div class="ai-note">Užpildyta pagal tavo nuotrauką – pataisyk, jei reikia.</div>` : ''}
+        <div class="field"><label>Odos atspalvis</label><div class="swatches">${SKINS.map((x) => `<button class="sw ${d.skin === x.id ? 'on' : ''}" style="background:${x.hex}" data-o="set" data-k="skin" data-v="${x.id}" aria-label="${x.label}"></button>`).join('')}</div>
+          <span class="small muted">${SKINS.find((x) => x.id === d.skin)?.label || ''}</span></div>
         <div class="field"><label>Plaukai</label><div class="swatches">${HAIRS.map((x) => `<button class="sw ${d.hair === x.id ? 'on' : ''}" style="background:${x.hex}" data-o="set" data-k="hair" data-v="${x.id}" aria-label="${x.label}"></button>`).join('')}</div>
           <span class="small muted">${HAIRS.find((x) => x.id === d.hair)?.label || ''}</span></div>
         <div class="field"><label>Akys</label><div class="chips wrap">${EYES.map((x) => `<button class="chip soft ${d.eyes === x.id ? 'on' : ''}" data-o="set" data-k="eyes" data-v="${x.id}">${x.label}</button>`).join('')}</div></div>
-        <div class="field"><label>Odos potonis · pažiūrėk į venas ant riešo</label><div class="chips wrap">${UNDERTONES.map((x) => `<button class="chip soft ${d.undertone === x.id ? 'on' : ''}" data-o="set" data-k="undertone" data-v="${x.id}">${x.label}</button>`).join('')}</div>
-          ${d.undertone ? `<span class="small muted">${UNDERTONES.find((x) => x.id === d.undertone).hint}</span>` : ''}</div>
+        <div class="field"><label>Odos potonis</label>
+          <div class="ut-help">
+            <p class="small" style="margin:0 0 10px">Potonis – tai atspalvis po oda. Jis nesikeičia nuo įdegio. Atlik bent vieną testą dienos šviesoje:</p>
+            <div class="ut-test"><b>1. Venos ant riešo vidinės pusės</b>
+              <div class="ut-opts"><span><i style="background:#5B7F5A"></i>žalsvos → šiltas</span><span><i style="background:#5A5F9A"></i>melsvos, violetinės → šaltas</span><span><i style="background:linear-gradient(90deg,#5B7F5A 50%,#5A5F9A 50%)"></i>sunku pasakyti → neutralus</span></div></div>
+            <div class="ut-test"><b>2. Papuošalai prie veido</b>
+              <div class="ut-opts"><span><i style="background:linear-gradient(135deg,#F3D27A,#B8872E)"></i>gražiau auksas → šiltas</span><span><i style="background:linear-gradient(135deg,#F2F2F2,#9EA3A8)"></i>gražiau sidabras → šaltas</span></div></div>
+            <div class="ut-test"><b>3. Audinys prie veido</b>
+              <div class="ut-opts"><span><i style="background:#F3E6CC"></i>labiau tinka kreminė → šiltas</span><span><i style="background:#FFFFFF"></i>labiau tinka grynai balta → šaltas</span></div></div>
+          </div>
+          <div class="chips wrap">${UNDERTONES.map((x) => `<button class="chip soft ${d.undertone === x.id ? 'on' : ''}" data-o="set" data-k="undertone" data-v="${x.id}">${x.label}</button>`).join('')}</div></div>
         ${se ? `<div class="season"><span class="label">Tavo spalvų tipas</span><div class="se-name">${se.label}</div><p class="small">${se.desc[0].toUpperCase() + se.desc.slice(1)}. Vengti prie veido: ${se.avoid}.</p>
           <div class="palette">${se.good.map(([n, hex]) => `<span><i style="background:${hex}"></i>${n}</span>`).join('')}</div></div>` : ''}
-        ${canAI && analyzeSelfie ? `<button class="btn sm" data-o="selfie">Patikslinti iš asmenukės · DI ~0,01 $</button>
-          <span class="small muted">Geriausia dienos šviesoje, be makiažo filtrų. Nuotrauka nesaugoma.</span>` : ''}`;
+        ${canAI && ai.analyzeSelfie ? `<div class="selfie-box">
+          <div class="ex-row"><figure class="ex-ph sm"><img src="img/ex-selfie.jpg" alt="Pavyzdys"><figcaption class="label">Pavyzdys</figcaption></figure>
+          <div><b style="font-size:15px">Arba patikslink iš asmenukės</b>
+          <ul class="ex-list"><li>Prie lango, <b>veidu į dienos šviesą</b></li><li><b>Be makiažo</b> ir be filtrų</li><li>Matosi <b>plaukai ir akys</b></li><li>Neutralūs rūbai – balti ar pilki</li><li>Ne geltona lempų šviesa</li></ul></div></div>
+          <button class="btn sm block" data-o="selfie">Įkelti asmenukę · DI ~0,01 $</button></div>` : ''}`;
     }
     if (s === 'styles') {
       return `<div class="onb-q"><span class="label">Stilius</span><h2>Kas tau<br><em>artima?</em></h2></div>
         <p class="small muted" style="margin-top:-6px">Pasirink kelis. Vėliau stilistė mokysis iš to, ką renkiesi.</p>
-        <div class="chips wrap">${STYLES.map((x) => `<button class="chip soft ${d.styles.includes(x) ? 'on' : ''}" data-o="style" data-v="${x}">${x}</button>`).join('')}</div>`;
+        <div class="style-grid">${STYLES.map((x) => `<button class="stc ${d.styles.includes(x.id) ? 'on' : ''}" data-o="style" data-v="${esc(x.id)}">
+          <img src="img/st-${x.img}.jpg" alt="" loading="lazy"><span class="stc-t"><b>${x.id}</b><small>${x.desc}</small></span></button>`).join('')}</div>
+        <p class="label" style="margin:0">Nuotraukos: Unsplash</p>`;
     }
     if (s === 'avatar') {
       const bt = BODY_TYPES.find((b) => b.id === d.bodyType);
-      const se = SEASONS_C[d.season];
-      return `<div class="onb-q"><span class="label">Paruošta</span><h2>${d.name ? esc(d.name) + ',<br>' : ''}<em>čia tu</em></h2></div>
-        <div class="onb-avatar">${avatarSVG(d, { cls: 'big-av', ruler: true })}
-          <dl class="av-facts"><dt>Ūgis</dt><dd>${d.height} cm</dd><dt>Sudėjimas</dt><dd>${BUILDS.find((b) => b.id === d.build)?.label}</dd>
-          <dt>Figūra</dt><dd>${bt ? bt.label : '—'}</dd><dt>Spalvos</dt><dd>${se ? se.label : '—'}</dd></dl></div>
+      const se = SEASONS_C[d.seasonAI || guessSeason(d)];
+      const row = (label, val, to) => `<button class="sum-row" data-o="goto" data-v="${to}"><span class="label">${label}</span><span class="sum-v">${val}</span><span class="sum-e">Keisti</span></button>`;
+      return `<div class="onb-q"><span class="label">Patikrink</span><h2>${d.name ? esc(d.name) + ',<br>' : ''}<em>čia tu</em></h2></div>
+        <div class="onb-avatar">${avatarVisual('big-av')}</div>
+        ${d.avatarImg || d._avatarP ? `<div class="row" style="justify-content:center;gap:8px">${d.avatarImg && canAI && d.photo ? `<button class="btn sm" data-o="regen">Sukurti manekeną iš naujo</button>` : ''}</div>` : canAI ? `<button class="btn sm" data-o="goto" data-v="photo">Sukurti manekeną iš nuotraukos</button>` : ''}
+        ${avatarErr ? `<div class="gap-note warn"><span class="label">Nepavyko</span>${esc(avatarErr)}</div>` : ''}
+        <div class="sum">
+          ${row('Vardas', esc(d.name) || '—', 'name')}
+          ${row('Nuotrauka', d.photo ? 'įkelta' : 'nėra', 'photo')}
+          ${row('Ūgis', d.height + ' cm', 'size')}
+          ${row('Sudėjimas', BUILDS.find((b) => b.id === d.build)?.label || '—', 'size')}
+          ${row('Figūra', bt ? bt.label : '—', 'body')}
+          ${row('Spalvos', se ? se.label : '—', 'colors')}
+          ${row('Stilius', d.styles.length ? esc(d.styles.join(', ')) : '—', 'styles')}
+        </div>
         ${se ? `<div class="palette">${se.good.map(([n, hex]) => `<span><i style="background:${hex}"></i>${n}</span>`).join('')}</div>` : ''}
-        <p class="small muted">Tokių pačių proporcijų bus ir manekenas, ant kurio DI rodys tavo derinius.</p>`;
+        <p class="small muted">Paliesk bet kurią eilutę, kad pakeistum.</p>`;
     }
     return '';
   }
@@ -356,15 +448,22 @@ export function runOnboarding({ me = {}, startAt = 0, canAI = false, analyzeSelf
     if (s === 'colors') return !!(d.eyes && d.undertone);
     return true;
   }
+  function nextLabel() {
+    const s = STEPS[step];
+    if (s === 'avatar') return 'Viskas tinka';
+    if (editReturn) return 'Išsaugoti';
+    if (s === 'name' && !d.name) return 'Praleisti';
+    if (s === 'photo' && !d.photo) return 'Praleisti – rinksiuosi pati';
+    return 'Toliau';
+  }
 
   function draw() {
     const s = STEPS[step];
-    const last = s === 'avatar';
     const anim = drawn !== step + (quiz ? 'q' : '');
     drawn = step + (quiz ? 'q' : '');
     const keepY = anim ? 0 : el.scrollTop;
     el.innerHTML = `${top()}<div class="onb-body ${anim ? 'anim' : ''}" data-step="${s}">${screen()}</div>
-      ${s === 'welcome' ? '' : `<div class="onb-foot"><button class="btn primary block" data-o="next" ${canNext() ? '' : 'disabled'}>${last ? 'Viskas tinka' : s === 'name' && !d.name ? 'Praleisti' : 'Toliau'}</button></div>`}`;
+      ${s === 'welcome' ? '' : `<div class="onb-foot"><button class="btn ${s === 'photo' && !d.photo ? '' : 'primary'} block" data-o="next" ${canNext() ? '' : 'disabled'}>${nextLabel()}</button></div>`}`;
     el.scrollTop = keepY;
     const r = el.querySelector('#obH');
     if (r) r.addEventListener('input', () => { d.height = +r.value; el.querySelector('#obHval').textContent = r.value; });
@@ -372,14 +471,29 @@ export function runOnboarding({ me = {}, startAt = 0, canAI = false, analyzeSelf
     if (n) n.addEventListener('input', () => {
       d.name = n.value.trim();
       const b = el.querySelector('[data-o=next]');
-      if (b) b.textContent = d.name ? 'Toliau' : 'Praleisti';
+      if (b) b.textContent = nextLabel();
     });
   }
 
-  function finish() {
+  function startAvatar() {
+    if (!canAI || !ai.createAvatar || !d.photo) return;
+    avatarErr = '';
+    d.avatarImg = null;
+    const p = ai.createAvatar(d.photo).then((b) => { d.avatarImg = b; }).catch((e) => { avatarErr = 'Manekeno sukurti nepavyko: ' + e.message; })
+      .finally(() => { if (d._avatarP === p) d._avatarP = null; if (el.isConnected && STEPS[step] === 'avatar') draw(); });
+    d._avatarP = p;
+  }
+
+  async function finish() {
+    if (d._avatarP) {
+      busyOn('Baigiamas kurti tavo manekenas', 'dar kelios sekundės');
+      await d._avatarP.catch(() => {});
+      busyOff();
+    }
     d.season = d.seasonAI || guessSeason(d);
     d.done = true;
     d.updatedAt = Date.now();
+    delete d._avatarP;
     el.remove();
     document.body.style.overflow = '';
     onSave(d);
@@ -389,13 +503,19 @@ export function runOnboarding({ me = {}, startAt = 0, canAI = false, analyzeSelf
     const b = e.target.closest('[data-o]');
     if (!b) return;
     const o = b.dataset.o;
+    const from = STEPS[step];
     if (o === 'next') {
       if (STEPS[step] === 'body' && quiz) { d.bodyType = guessBodyType(quiz); quiz = null; }
       if (STEPS[step] === 'colors') d.season = d.seasonAI || guessSeason(d);
-      if (step === STEPS.length - 1) return finish();
-      step++;
+      if (step === last) return finish();
+      if (editReturn) { editReturn = false; step = last; } else step++;
     }
-    if (o === 'back') { if (quiz) quiz = null; else if (step > 1) step--; }
+    if (o === 'back') {
+      if (quiz) quiz = null;
+      else if (editReturn) { editReturn = false; step = last; }
+      else if (step > 1) step--;
+    }
+    if (o === 'goto') { step = STEPS.indexOf(b.dataset.v); editReturn = from === 'avatar' || editReturn; }
     if (o === 'build') d.build = b.dataset.v;
     if (o === 'body') d.bodyType = b.dataset.v;
     if (o === 'quiz-on') quiz = {};
@@ -403,65 +523,99 @@ export function runOnboarding({ me = {}, startAt = 0, canAI = false, analyzeSelf
     if (o === 'qz') quiz[b.dataset.k] = b.dataset.v;
     if (o === 'set') { d[b.dataset.k] = b.dataset.v; d.seasonAI = null; }
     if (o === 'style') d.styles = d.styles.includes(b.dataset.v) ? d.styles.filter((x) => x !== b.dataset.v) : [...d.styles, b.dataset.v];
-    if (o === 'selfie') {
-      const inp = document.createElement('input');
-      inp.type = 'file';
-      inp.accept = 'image/*';
-      inp.onchange = async () => {
-        const f = inp.files[0];
-        if (!f) return;
-        busyOn('Žiūriu į tavo spalvas', 'apie 10 sekundžių');
+    if (o === 'regen') { startAvatar(); }
+    if (o === 'photo') {
+      const f = await pickPhoto();
+      if (!f) return;
+      d.photo = await ai.prepPhoto(f);
+      d.fromPhoto = false;
+      if (canAI && ai.analyzeBody) {
+        busyOn('Žiūriu į tavo nuotrauką', 'figūra ir spalvos · ~15 s');
         try {
-          const r = await analyzeSelfie(f);
+          const r = await ai.analyzeBody(d.photo);
+          if (BODY_TYPES.some((x) => x.id === r.bodyType)) d.bodyType = r.bodyType;
+          if (BUILDS.some((x) => x.id === r.build)) d.build = r.build;
           for (const k of ['skin', 'hair', 'eyes', 'undertone']) if (r[k]) d[k] = r[k];
-          if (r.season && SEASONS_C[r.season]) d.seasonAI = r.season;
+          if (SEASONS_C[r.season]) d.seasonAI = r.season;
+          d.fromPhoto = true;
         } catch (err) {
-          alert('Nepavyko: ' + err.message);
+          alert('Nuotraukos išanalizuoti nepavyko: ' + err.message);
         }
         busyOff();
-        draw();
-      };
-      inp.click();
-      return;
+        startAvatar();
+      }
+      return draw();
+    }
+    if (o === 'selfie') {
+      const f = await pickPhoto();
+      if (!f) return;
+      busyOn('Žiūriu į tavo spalvas', 'apie 10 sekundžių');
+      try {
+        const r = await ai.analyzeSelfie(f);
+        for (const k of ['skin', 'hair', 'eyes', 'undertone']) if (r[k]) d[k] = r[k];
+        if (r.season && SEASONS_C[r.season]) d.seasonAI = r.season;
+      } catch (err) {
+        alert('Nepavyko: ' + err.message);
+      }
+      busyOff();
+      return draw();
     }
     draw();
   });
   draw();
 }
 
-// ---------- Trumpas gidas ----------
+// ---------- Detalus gidas: eina per puslapius ir rodo konkrečias vietas ----------
 const COACH = [
-  { sel: '#tabbar [data-tab=fitas]', title: 'Fitas', text: 'Parašyk, kokia šiandien nuotaika, ir stilistė sudės derinį iš tavo spintos pagal orus.' },
-  { sel: '#tabbar [data-tab=spinta]', title: 'Spinta', text: 'Čia įkeli rūbus. Gali pasirinkti daug nuotraukų iš karto – fonas iškerpamas pats.' },
-  { sel: '#tabbar [data-tab=megstami]', title: 'Mėgstami', text: 'Patikę deriniai lieka čia. Stilistė iš jų mokosi tavo skonio.' },
-  { sel: '#tabbar [data-tab=kalendorius]', title: 'Kalendorius', text: 'Pažymėk, ką vilkėjai. Stilistė primins seniai pamirštus rūbus.' },
-  { sel: '#tabbar [data-tab=nustatymai]', title: 'Daugiau', text: 'Tavo profilis, avataras, DI raktas ir atsarginė kopija.' },
+  { tab: 'fitas', sel: '#tabbar [data-tab=fitas]', title: 'Fitas', text: 'Pagrindinis puslapis. Čia kasdien gausi derinį iš savo spintos.' },
+  { tab: 'fitas', sel: '.weather-box', title: 'Orai', text: 'Stilistė visada žiūri į šiandienos orus – šaltą dieną pasiūlys sluoksnius.' },
+  { tab: 'fitas', sel: '#vibe', title: 'Nuotaika ir proga', text: 'Parašyk savais žodžiais: „pasimatymas vakare“, „noriu patogiai, bet stilingai“.' },
+  { tab: 'fitas', sel: '.vibe-card .chips', title: 'Greiti pasirinkimai', text: 'Nenori rašyti – paliesk vieną iš paruoštų idėjų.' },
+  { tab: 'fitas', sel: '[data-act=style]', title: 'Sukurk man fitą', text: 'DI stilistė parinks derinį iš tavo rūbų ir paaiškins, kodėl jis tinka.' },
+  { tab: 'fitas', sel: '[data-act=shuffle]', title: 'Dėlioti pačiai', text: 'Rūbų eilės, kurias braukai į šonus. Prisek patikusį rūbą ir spausk „Maišyti“.' },
+  { tab: 'spinta', sel: '.fab', title: 'Pridėti rūbų', text: 'Nufotografuok rūbą arba pasirink kelias nuotraukas iš galerijos – fonas iškerpamas pats.' },
+  { tab: 'spinta', sel: '.filters', title: 'Grupės', text: 'Rūbai surūšiuoti pagal grupes. Paliesk rūbą – atsidarys jo kortelė su visa informacija.' },
+  { tab: 'spinta', sel: '[data-act=select-mode]', title: 'Žymėti', text: 'Pažymėk kelis rūbus iš karto, kad juos perkeltum į kitą kategoriją ar ištrintum.' },
+  { tab: 'megstami', sel: '#tabbar [data-tab=megstami]', title: 'Mėgstami', text: 'Patikę deriniai lieka čia. Stilistė iš jų mokosi tavo skonio.' },
+  { tab: 'kalendorius', sel: '.cal', title: 'Kalendorius', text: 'Paliesk dieną ir pažymėk, ką vilkėjai. Stilistė primins seniai pamirštus rūbus.' },
+  { tab: 'nustatymai', sel: '.prof-card', title: 'Tavo profilis', text: 'Figūra, spalvos ir manekenas. Bet kada gali pakeisti.' },
+  { tab: 'nustatymai', sel: '#apiKey', title: 'DI raktas', text: 'Čia įjungiama DI stilistė. Raktas saugomas tik tavo telefone.' },
 ];
 
-export function runCoach({ name = '', onDone }) {
+export function runCoach({ name = '', onDone, go }) {
   let i = 0;
   const el = document.createElement('div');
   el.className = 'coach';
   document.body.appendChild(el);
-  function draw() {
+  async function draw() {
     const c = COACH[i];
-    const t = document.querySelector(c.sel);
-    const r = t ? t.getBoundingClientRect() : { left: 0, top: 0, width: 0, height: 0 };
-    const pad = 4;
+    await go(c.tab);
+    let t = document.querySelector(c.sel) || document.querySelector(`#tabbar [data-tab=${c.tab}]`);
+    if (t && !t.closest('#tabbar')) {
+      t.scrollIntoView({ block: 'center' });
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    const r = t ? t.getBoundingClientRect() : { left: 0, top: 0, width: 0, height: 0, bottom: 0 };
+    const pad = 6;
+    const below = r.top + r.height / 2 < window.innerHeight * 0.45;
+    const pos = below ? `top:${Math.min(r.bottom + 16, window.innerHeight - 260)}px` : `bottom:${window.innerHeight - r.top + 16}px`;
     el.innerHTML = `<div class="coach-hole" style="left:${r.left - pad}px;top:${r.top - pad}px;width:${r.width + pad * 2}px;height:${r.height + pad * 2}px"></div>
-      <div class="coach-card" style="bottom:${window.innerHeight - r.top + 18}px">
-        <div class="row" style="justify-content:space-between"><span class="label">${String(i + 1).padStart(2, '0')} / ${String(COACH.length).padStart(2, '0')}</span><button class="x" data-c="skip">Praleisti</button></div>
+      <div class="coach-card" style="${pos}">
+        <div class="row" style="justify-content:space-between"><span class="label">${String(i + 1).padStart(2, '0')} / ${String(COACH.length).padStart(2, '0')}</span><button class="x" data-c="skip">Baigti gidą</button></div>
         ${i === 0 && name ? `<div class="serif" style="font-size:18px;color:var(--wine)">Sveika, ${esc(name)}.</div>` : ''}
         <h3>${c.title}</h3><p>${c.text}</p>
-        <button class="btn primary block" data-c="next">${i === COACH.length - 1 ? 'Pradėkim nuo spintos' : 'Toliau'}</button>
+        <div class="row">${i > 0 ? `<button class="btn" data-c="prev">← Atgal</button>` : ''}
+          <button class="btn primary" style="flex:1" data-c="next">${i === COACH.length - 1 ? 'Pradėkim nuo spintos' : 'Toliau'}</button></div>
       </div>`;
   }
   el.addEventListener('click', (e) => {
     const b = e.target.closest('[data-c]');
     if (!b) return;
-    if (b.dataset.c === 'next' && i < COACH.length - 1) { i++; return draw(); }
+    const a = b.dataset.c;
+    if (a === 'next' && i < COACH.length - 1) { i++; return draw(); }
+    if (a === 'prev' && i > 0) { i--; return draw(); }
     el.remove();
-    onDone(b.dataset.c === 'next');
+    onDone(a === 'next');
   });
   window.addEventListener('resize', () => el.isConnected && draw());
   draw();
