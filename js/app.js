@@ -444,7 +444,7 @@ function viewFitas() {
     <textarea class="input" id="vibe" placeholder="Kava su drauge, noriu jaustis patogiai, bet atrodyti stilingai…">${esc(S.lastVibe || '')}</textarea>
     <div class="chips">${VIBE_IDEAS.map((v) => `<button class="chip" data-act="vibe-idea" data-v="${esc(v)}">${esc(v)}</button>`).join('')}</div>
     <button class="btn primary block" data-act="style" ${S.styling ? 'disabled' : ''}>${S.styling ? 'Stilistė galvoja…' : 'Sukurk man fitą'}</button>
-    <button class="btn block" data-act="builder">Susidėsiu pati</button>
+    <div class="row"><button class="btn" style="flex:1" data-act="shuffle">Dėlioti</button><button class="btn" style="flex:1" data-act="builder">Iš sąrašo</button></div>
   </div>`;
 
   if (S.styling) html += `<div class="card">${loadingHTML('Stilistė rausiasi po tavo spintą…')}</div>`;
@@ -486,6 +486,7 @@ function viewSpinta() {
       <p>Spausk + ir nufotografuok rūbą arba pasirink kelias nuotraukas iš galerijos. Fonas iškerpamas automatiškai.</p>
       <button class="btn primary" data-act="add">Pridėti rūbų</button></div>`;
   } else {
+    if (S.queue.length) html += uploadBannerHTML();
     html += `<div class="grid">`;
     for (const q of S.queue) {
       html += `<div class="tile" data-q="${q.id}"><div class="ph-wrap"><img class="ph" src="${q.preview}" alt=""></div><div class="cap">Įkeliama</div>
@@ -773,6 +774,8 @@ fileInput.addEventListener('change', async () => {
     return;
   }
   const single = files.length === 1;
+  if (!S.queueRunning) { S.batch = { total: 0, done: 0, ids: [] }; }
+  S.batch.total += files.length;
   for (const f of files) S.queue.push({ id: uid(), file: f, label: 'Laukia', p: 0, preview: URL.createObjectURL(f), single });
   if (S.tab !== 'spinta') location.hash = '#spinta';
   else rerender();
@@ -788,7 +791,25 @@ function defaultCategory() {
   return 'tshirts';
 }
 
+function stageOf(label = '') {
+  if (/DI/.test(label)) return 2;
+  if (/šviesa/i.test(label)) return 1;
+  return 0;
+}
+function uploadBannerHTML() {
+  const q = S.queue[0];
+  const b = S.batch || { total: S.queue.length, done: 0 };
+  const st = stageOf(q?.label);
+  const steps = ['Karpomas fonas', 'Taisoma šviesa', S.keyOk ? 'DI atpažįsta' : 'Saugoma'];
+  return `<div class="up-banner" id="upBanner">
+    <div class="row" style="justify-content:space-between"><span class="label">Įkeliama ${Math.min(b.done + 1, b.total)} iš ${b.total}</span><span class="label">${Math.round(((b.done + (q?.p || 0)) / Math.max(1, b.total)) * 100)}%</span></div>
+    <ol class="up-steps">${steps.map((t, i) => `<li class="${i < st ? 'done' : i === st ? 'on' : ''}">${t}</li>`).join('')}</ol>
+    <div class="bar"><i style="width:${((b.done + (q?.p || 0)) / Math.max(1, b.total)) * 100}%"></i></div>
+    <span class="small muted">Gali naršyti toliau – baigus parodysiu visus naujus rūbus peržiūrai.</span></div>`;
+}
 function updateQueueTile(q) {
+  const ban = document.getElementById('upBanner');
+  if (ban) ban.outerHTML = uploadBannerHTML();
   const el = document.querySelector(`[data-q="${q.id}"]`);
   if (!el) return;
   el.querySelector('.lbl').textContent = q.label;
@@ -820,6 +841,7 @@ async function runQueue() {
         }
       }
       if (await getSetting('autoEnhance', true)) {
+        q.label = 'Taisoma šviesa'; q.p = 0.72; updateQueueTile(q);
         try { image = await autoEnhance(image); } catch (e) { console.warn('enhance', e); }
       }
       const item = {
@@ -847,6 +869,7 @@ async function runQueue() {
       await db.put('items', item);
       S.items.push(item);
       done++; lastId = item.id; wasSingle = q.single;
+      if (S.batch) { S.batch.done++; S.batch.ids.push(item.id); }
     } catch (e) {
       console.error(e);
       toast('Nepavyko įkelti nuotraukos: ' + e.message);
@@ -856,9 +879,39 @@ async function runQueue() {
     if (S.tab === 'spinta') await rerender();
   }
   S.queueRunning = false;
+  const ids = S.batch?.ids || [];
+  S.batch = null;
   if (done === 1 && wasSingle) openItem(lastId, true);
-  else if (done > 1) toast(`Įkelta ${done} ${plural(done, 'rūbas', 'rūbai', 'rūbų')}`);
+  else if (ids.length > 1) openReview(ids);
+  else if (done) rerender();
 }
+
+// ---- Naujų rūbų peržiūra: viskas viename lange, be atskirų „Išsaugoti“ ----
+function openReview(ids) {
+  const its = ids.map(itemById).filter(Boolean);
+  if (!its.length) return;
+  openSheet(`${sheetTop(`Nauji rūbai · ${its.length}`)}
+    <div class="stack">
+      <p class="small muted" style="margin:0">${S.keyOk ? 'DI jau užpildė pavadinimus ir kategorijas.' : 'Rūbai jau spintoje.'} Pataisyk tik tai, kas neteisinga – pakeitimai saugomi iškart.</p>
+      <div class="rv-list">${its.map((it) => `<div class="rv-row" data-id="${it.id}">
+        <div class="rv-ph" data-act="item" data-id="${it.id}"><img src="${blobURL(it.image)}" alt=""></div>
+        <div class="rv-f"><input class="input rv-name" value="${esc(it.name)}" placeholder="Pavadinimas">
+          <select class="input rv-cat">${categorySelect(it.category)}</select></div>
+        <button class="rv-del" data-act="rv-del" data-id="${it.id}" aria-label="Ištrinti">×</button></div>`).join('')}</div>
+      <button class="btn primary block" data-act="close">Išsaugoti visus</button>
+    </div>`);
+}
+
+document.addEventListener('change', async (e) => {
+  const row = e.target.closest('.rv-row');
+  if (!row) return;
+  const it = itemById(row.dataset.id);
+  if (!it) return;
+  if (e.target.classList.contains('rv-name')) it.name = e.target.value.trim();
+  if (e.target.classList.contains('rv-cat')) it.category = e.target.value;
+  await db.put('items', it);
+  if (S.tab === 'spinta') { const y = window.scrollY; view.innerHTML = await viewSpinta(); window.scrollTo(0, y); }
+});
 
 // ================= Rūbo kortelė =================
 function categorySelect(selected) {
@@ -931,6 +984,138 @@ function openBuilder(editId = null) {
       <button class="btn primary block" data-act="build-save">${editId ? 'Išsaugoti' : 'Sukurti fitą'}</button>
     </div>`);
 }
+
+// ================= Dėliok: eilės pagal vietą, smeigtukai, maišymas =================
+const DL_ROWS = [
+  { slot: 'outer', label: 'Viršutinis', none: 'be striukės', optional: true, h: 120 },
+  { slot: 'top', label: 'Viršus', h: 150 },
+  { slot: 'onepiece', label: 'Suknelė', h: 230 },
+  { slot: 'bottom', label: 'Apačia', h: 160 },
+  { slot: 'legwear', label: 'Kojinės, pėdkelnės', none: 'be kojinių', optional: true, h: 110 },
+  { slot: 'shoes', label: 'Batai', none: 'be batų', optional: true, h: 84 },
+  { slot: 'side', label: 'Aksesuaras', none: 'be aksesuaro', optional: true, h: 84 },
+];
+const DL = { mode: 'sep', pins: {}, idx: {}, rare: false, el: null };
+
+function dlRows() {
+  return DL_ROWS.filter((r) => (DL.mode === 'dress' ? r.slot !== 'top' && r.slot !== 'bottom' : r.slot !== 'onepiece'))
+    .map((r) => ({ ...r, items: S.items.filter((i) => i.image && slotOf(i) === r.slot) }))
+    .filter((r) => r.items.length);
+}
+
+function dlPick(r) {
+  // atsitiktinis rūbas; jei įjungta – dažniau tie, kurie seniai vilkėti
+  const n = r.items.length + (r.optional ? 1 : 0);
+  if (!DL.rare) return Math.floor(Math.random() * n);
+  const ws = wearStats();
+  const score = (it) => (ws[it.id] ? ws[it.id].count : 0);
+  const weights = r.items.map((it) => 1 / (1 + score(it)) ** 1.5);
+  if (r.optional) weights.unshift(0.25);
+  const tot = weights.reduce((a, b) => a + b, 0);
+  let x = Math.random() * tot;
+  for (let i = 0; i < weights.length; i++) { x -= weights[i]; if (x <= 0) return i; }
+  return 0;
+}
+
+function openShuffle(fromIds = null) {
+  if (S.items.length < 2) { toast('Pirmiausia įkelk bent kelis rūbus'); location.hash = '#spinta'; return; }
+  if (fromIds) {
+    DL.mode = fromIds.some((id) => itemById(id) && slotOf(itemById(id)) === 'onepiece') ? 'dress' : 'sep';
+    DL.idx = {};
+    for (const r of dlRows()) {
+      const i = r.items.findIndex((it) => fromIds.includes(it.id));
+      DL.idx[r.slot] = i < 0 ? 0 : i + (r.optional ? 1 : 0);
+    }
+  }
+  const el = DL.el || document.createElement('div');
+  DL.el = el;
+  el.className = 'dlk';
+  if (!el.isConnected) document.body.appendChild(el);
+  document.body.style.overflow = 'hidden';
+  drawShuffle(!fromIds && !Object.keys(DL.idx).length);
+}
+
+function drawShuffle(randomize = false) {
+  const el = DL.el;
+  const rows = dlRows();
+  if (randomize) for (const r of rows) if (!DL.pins[r.slot]) DL.idx[r.slot] = dlPick(r);
+  const hasDress = S.items.some((i) => slotOf(i) === 'onepiece');
+  el.innerHTML = `<div class="dl-top">
+      <button class="x" data-dl="close">Uždaryti</button><span class="dl-title">Dėliok</span>
+      <button class="x" data-dl="rare" style="color:${DL.rare ? 'var(--wine)' : ''}">${DL.rare ? '● ' : ''}Retai vilkėti</button></div>
+    ${hasDress ? `<div class="dl-mode"><button class="${DL.mode === 'sep' ? 'on' : ''}" data-dl="mode" data-v="sep">Viršus + apačia</button><button class="${DL.mode === 'dress' ? 'on' : ''}" data-dl="mode" data-v="dress">Suknelė</button></div>` : ''}
+    <div class="dl-rows">${rows.map((r) => {
+      const cards = (r.optional ? [`<div class="dl-card none" data-i="0"><span class="label">${r.none}</span></div>`] : [])
+        .concat(r.items.map((it, i) => `<div class="dl-card" data-i="${i + (r.optional ? 1 : 0)}" data-id="${it.id}"><img src="${blobURL(it.image)}" alt="" draggable="false"></div>`));
+      return `<div class="dl-row ${DL.pins[r.slot] ? 'pinned' : ''}" data-slot="${r.slot}">
+        <div class="dl-head"><span class="label">${r.label}</span><button class="dl-pin" data-dl="pin" data-slot="${r.slot}">${DL.pins[r.slot] ? 'Prisegta' : 'Prisegti'}</button></div>
+        <div class="dl-track" style="--h:${r.h}px">${cards.join('')}</div></div>`;
+    }).join('')}</div>
+    <div class="dl-foot"><button class="btn" data-dl="shuffle">Maišyti</button><button class="btn primary" data-dl="save">Išsaugoti fitą</button></div>`;
+  // atsukam į pasirinktus
+  el.querySelectorAll('.dl-row').forEach((row) => {
+    const tr = row.querySelector('.dl-track');
+    const i = DL.idx[row.dataset.slot] || 0;
+    const card = tr.children[i];
+    if (card) tr.scrollLeft = card.offsetLeft - (tr.clientWidth - card.offsetWidth) / 2;
+    let t;
+    tr.addEventListener('scroll', () => {
+      clearTimeout(t);
+      t = setTimeout(() => {
+        const mid = tr.scrollLeft + tr.clientWidth / 2;
+        let best = 0, bd = 1e9;
+        [...tr.children].forEach((c, k) => { const d = Math.abs(c.offsetLeft + c.offsetWidth / 2 - mid); if (d < bd) { bd = d; best = k; } });
+        DL.idx[row.dataset.slot] = best;
+        tr.querySelectorAll('.dl-card').forEach((c, k) => c.classList.toggle('cur', k === best));
+      }, 90);
+    }, { passive: true });
+    tr.querySelectorAll('.dl-card').forEach((c, k) => c.classList.toggle('cur', k === i));
+  });
+}
+
+function shuffleScroll() {
+  const rows = dlRows();
+  for (const r of rows) {
+    if (DL.pins[r.slot]) continue;
+    let i = dlPick(r);
+    if (i === DL.idx[r.slot] && r.items.length > 1) i = dlPick(r);
+    DL.idx[r.slot] = i;
+    const tr = DL.el.querySelector(`.dl-row[data-slot="${r.slot}"] .dl-track`);
+    const card = tr?.children[i];
+    if (card) tr.scrollTo({ left: card.offsetLeft - (tr.clientWidth - card.offsetWidth) / 2, behavior: 'smooth' });
+  }
+}
+
+function closeShuffle() {
+  DL.el?.remove();
+  document.body.style.overflow = '';
+}
+
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-dl]');
+  if (!b || !DL.el?.contains(b)) return;
+  const a = b.dataset.dl;
+  if (a === 'close') return closeShuffle();
+  if (a === 'pin') { DL.pins[b.dataset.slot] = !DL.pins[b.dataset.slot]; const row = b.closest('.dl-row'); row.classList.toggle('pinned'); b.textContent = DL.pins[b.dataset.slot] ? 'Prisegta' : 'Prisegti'; return; }
+  if (a === 'rare') { DL.rare = !DL.rare; toast(DL.rare ? 'Dažniau rodys seniai vilkėtus rūbus' : 'Visi rūbai vienodai'); return drawShuffle(); }
+  if (a === 'mode') { DL.mode = b.dataset.v; return drawShuffle(true); }
+  if (a === 'shuffle') return shuffleScroll();
+  if (a === 'save') {
+    const ids = [];
+    DL.el.querySelectorAll('.dl-row').forEach((row) => {
+      const c = row.querySelector('.dl-track').children[DL.idx[row.dataset.slot] || 0];
+      if (c?.dataset.id) ids.push(c.dataset.id);
+    });
+    if (!ids.length) return toast('Pasirink bent vieną rūbą');
+    const o = { id: uid(), title: 'Sudėliotas derinys', vibe: '', itemIds: ids, createdAt: Date.now(), favorite: false, source: 'manual', renders: {} };
+    await saveOutfit(o);
+    await setCurrent(o.id);
+    logEvent(`Pati susidėliojo: ${itemNames(ids).join(' + ')}`);
+    closeShuffle();
+    toast('Fitas išsaugotas');
+    if (S.tab !== 'fitas') location.hash = '#fitas'; else rerender();
+  }
+});
 
 // ================= Veiksmai =================
 async function saveOutfit(o) {
@@ -1020,6 +1205,9 @@ const actions = {
   },
   builder(el) {
     openBuilder(el.dataset.id || null);
+  },
+  shuffle(el) {
+    openShuffle(el.dataset.id ? outfitById(el.dataset.id)?.itemIds : null);
   },
   pick(el) {
     const id = el.dataset.id;
@@ -1367,6 +1555,14 @@ const actions = {
     await afterOutfitEdit(o, 'Rūbas pridėtas');
   },
   noop() {},
+  async 'rv-del'(el) {
+    const id = el.dataset.id;
+    await db.del('items', id);
+    S.items = S.items.filter((i) => i.id !== id);
+    el.closest('.rv-row').remove();
+    toast('Ištrinta');
+    if (S.tab === 'spinta') { const y = window.scrollY; view.innerHTML = await viewSpinta(); window.scrollTo(0, y); }
+  },
   onboard(el) {
     startOnboarding(+el.dataset.v || 0);
   },
