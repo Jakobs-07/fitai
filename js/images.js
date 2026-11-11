@@ -79,7 +79,9 @@ export async function removeBackground(blob, onProgress) {
     try {
       const result = await fn(blob, { model, output: { format: 'image/png' }, progress });
       bgWorkingModel = model;
-      return trimTransparent(result);
+      let clean = result;
+      try { clean = await cleanCutout(result); } catch (e) { console.warn('clean', e); }
+      return trimTransparent(clean);
     } catch (e) {
       console.warn('bg model failed', model, e);
       lastErr = e;
@@ -169,4 +171,100 @@ export async function autoEnhance(blob, strength = 0.7) {
   }
   ctx.putImageData(id, 0, 0);
   return canvasToBlob(c, blob.type === 'image/jpeg' ? 'image/jpeg' : 'image/png', 0.9);
+}
+
+// ---- Iškirpimo valymas: atplaišos (pakabos, siūlai), skylės viduje, dantyti kraštai ----
+function minFilter(src, w, h, r) {
+  // kvadratinis „erozijos“ filtras (atskirai eilutėms ir stulpeliams)
+  const tmp = new Uint8Array(w * h), out = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    const o = y * w;
+    for (let x = 0; x < w; x++) {
+      let m = 1;
+      for (let k = -r; k <= r && m; k++) { const xx = x + k; if (xx < 0 || xx >= w || !src[o + xx]) m = 0; }
+      tmp[o + x] = m;
+    }
+  }
+  for (let x = 0; x < w; x++) {
+    for (let y = 0; y < h; y++) {
+      let m = 1;
+      for (let k = -r; k <= r && m; k++) { const yy = y + k; if (yy < 0 || yy >= h || !tmp[yy * w + x]) m = 0; }
+      out[y * w + x] = m;
+    }
+  }
+  return out;
+}
+function maxFilter(src, w, h, r) {
+  const inv = new Uint8Array(w * h);
+  for (let i = 0; i < inv.length; i++) inv[i] = src[i] ? 0 : 1;
+  const e = minFilter(inv, w, h, r);
+  for (let i = 0; i < e.length; i++) e[i] = e[i] ? 0 : 1;
+  return e;
+}
+function components(mask, w, h) {
+  const lab = new Int32Array(w * h);
+  const sizes = [0];
+  const stack = [];
+  let n = 0;
+  for (let i = 0; i < mask.length; i++) {
+    if (!mask[i] || lab[i]) continue;
+    n++;
+    let size = 0;
+    stack.push(i);
+    lab[i] = n;
+    while (stack.length) {
+      const p = stack.pop();
+      size++;
+      const x = p % w, y = (p - x) / w;
+      if (x > 0 && mask[p - 1] && !lab[p - 1]) { lab[p - 1] = n; stack.push(p - 1); }
+      if (x < w - 1 && mask[p + 1] && !lab[p + 1]) { lab[p + 1] = n; stack.push(p + 1); }
+      if (y > 0 && mask[p - w] && !lab[p - w]) { lab[p - w] = n; stack.push(p - w); }
+      if (y < h - 1 && mask[p + w] && !lab[p + w]) { lab[p + w] = n; stack.push(p + w); }
+    }
+    sizes.push(size);
+  }
+  return { lab, sizes };
+}
+
+export async function cleanCutout(blob) {
+  const img = await bitmap(blob);
+  const w = img.width, h = img.height;
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(img, 0, 0);
+  const id = ctx.getImageData(0, 0, w, h);
+  const d = id.data;
+  const r = Math.max(2, Math.round(Math.max(w, h) / 400)); // ~3 px 1200 px nuotraukai
+  const solid = new Uint8Array(w * h);
+  for (let i = 0; i < solid.length; i++) solid[i] = d[i * 4 + 3] > 110 ? 1 : 0;
+  // 1) „atidarymas“: nuima plonas linijas (pakabos kabliukas, siūlai)
+  const opened = maxFilter(minFilter(solid, w, h, r), w, h, r);
+  // 2) paliekam tik didelius gabalus (rūbą), mažas dėmeles išmetam
+  const { lab, sizes } = components(opened, w, h);
+  const biggest = Math.max(0, ...sizes.slice(1));
+  if (!biggest) return blob;
+  const keepLab = new Uint8Array(sizes.length);
+  for (let k = 1; k < sizes.length; k++) keepLab[k] = sizes[k] >= biggest * 0.04 ? 1 : 0;
+  const keep = new Uint8Array(w * h);
+  for (let i = 0; i < keep.length; i++) keep[i] = keepLab[lab[i]];
+  // 3) užpildom mažas skyles rūbo viduje (pusiau permatomos vietos), didelius tarpus (tarp rankovės ir šono) paliekam
+  const holes = components(keep.map((v) => (v ? 0 : 1)), w, h);
+  const border = new Uint8Array(holes.sizes.length);
+  for (let x = 0; x < w; x++) { border[holes.lab[x]] = 1; border[holes.lab[(h - 1) * w + x]] = 1; }
+  for (let y = 0; y < h; y++) { border[holes.lab[y * w]] = 1; border[holes.lab[y * w + w - 1]] = 1; }
+  for (let i = 0; i < keep.length; i++) {
+    const L = holes.lab[i];
+    if (L && !border[L] && holes.sizes[L] < biggest * 0.015) keep[i] = 1;
+  }
+  const near = maxFilter(keep, w, h, r + 1); // kraštai lieka
+  const core = minFilter(keep, w, h, r + 1); // vidus – visiškai neperšviečiamas
+  for (let i = 0; i < keep.length; i++) {
+    const a = i * 4 + 3;
+    if (!near[i]) d[a] = 0;
+    else if (core[i]) d[a] = 255;
+    else d[a] = d[a] < 40 ? 0 : d[a] > 215 ? 255 : d[a];
+  }
+  ctx.putImageData(id, 0, 0);
+  return canvasToBlob(c, 'image/png');
 }
