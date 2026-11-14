@@ -145,7 +145,9 @@ const STYLIST =
   'Jei įmanoma, rinkis rečiau vilkėtus rūbus, bet stilius svarbiau. ' +
   'SVARBIAUSIA – jos stiliaus profilis (jos_stilius): ką ji pati apie save parašė, ką tu apie ją išmokai, ' +
   'kokie fitai jai patiko, kuriuos atmetė ir ką pati keitė. Derink prie jos skonio, nekartok to, kas jai nepatiko. ' +
-  'ORAI: jei šalta, vėjuota ar lyja – pirmiausia sluoksniuok iš to, kas yra (megztinis po švarku, marškiniai po megztiniu, pėdkelnės po kelnėmis ar sijonu, šiltesni batai). ' +
+  'ORAI: jei šalta, vėjuota ar lyja – pirmiausia sluoksniuok iš to, kas yra (megztinis po švarku, marškiniai po megztiniu, šiltesni batai). ' +
+  'PĖDKELNĖS IR KOJINĖS: pėdkelnes dėk tik su sijonu, suknele ar šortais. Su kelnėmis pėdkelnių ir kojinių į fitą NEDĖK – jei šalta, tik patark patarime apsimauti šiltas pėdkelnes po kelnėmis. ' +
+  'Ryškios spalvos pėdkelnės (raudonos ir pan.) – tik kai jos sąmoningai dera prie viso derinio. ' +
   'KALBA: rašyk taisyklinga, paprasta lietuvių kalba, trumpais aiškiais sakiniais. Nekurk naujų žodžių, nemaišyk angliškų žodžių, nevartok techninių terminų ar laukų pavadinimų. ' +
   'Minėk tik tuos rūbus, kurie tikrai yra spintoje, ir vadink juos jų pavadinimais. Nesiprieštarauk sau. ' +
   'Atsižvelk į jos figūrą ir spalvų tipą (jos_figura_ir_spalvos) – rinkis jai palankius siluetus ir spalvas prie veido, bet jos skonis svarbiau už taisykles. ';
@@ -206,6 +208,8 @@ function checkOutfit(ids, items, categories, weather) {
   if (leg.filter((i) => i.category === 'tights').length > 1) problems.push('Kelios pėdkelnės vienu metu – palik vienas.');
   if (leg.filter((i) => i.category !== 'tights').length > 1) problems.push('Kelios poros kojinių – palik vieną.');
   if (n('shoes') === 0 && items.some((i) => slot(i) === 'shoes')) problems.push('Pridėk batus.');
+  const pants = (by.bottom || []).filter((i) => i.category === 'pants');
+  if (pants.length && leg.length) problems.push('Pėdkelnės ar kojinės su kelnėmis į fitą nededamos – išimk jas (jei šalta, paminėk patarime).');
   const fm = String(weather || '').match(/jaučiasi (-?\d+)/);
   const cold = fm ? +fm[1] < 10 : false;
   if (cold && !n('outer') && items.some((i) => slot(i) === 'outer')) problems.push('Lauke šalta – pridėk viršutinį rūbą (striukę, paltą ar švarką).');
@@ -263,8 +267,37 @@ export async function styleOutfit({ vibe, items, categories, weather, wearStats,
       if (fixed.itemIds.length && checkOutfit(fixed.itemIds, items, categories, weather).length <= problems.length) out = fixed;
     } catch (e) { console.warn('fix', e); }
   }
+  out.itemIds = sanitizeOutfit(out.itemIds, items, categories, must);
   if (!out.itemIds.length) throw new Error('Stilistei nepavyko parinkti rūbų. Pabandyk kitaip aprašyti norą.');
   return out;
+}
+
+// Paskutinė apsauga: jei DI vis tiek suklydo – išmetam tai, kas tikrai netinka
+function sanitizeOutfit(ids, items, categories, must = []) {
+  const catById = Object.fromEntries(categories.map((c) => [c.id, c]));
+  const its = ids.map((id) => items.find((i) => i.id === id)).filter(Boolean);
+  const slot = (it) => catById[it.category]?.slot || 'top';
+  const keep = [];
+  const count = (s, f = () => true) => keep.filter((i) => slot(i) === s && f(i)).length;
+  const order = [...its].sort((a, b) => must.includes(b.id) - must.includes(a.id));
+  const hasOne = order.some((i) => slot(i) === 'onepiece');
+  const hasTopBottom = order.some((i) => slot(i) === 'top') && order.some((i) => slot(i) === 'bottom');
+  const preferDress = hasOne && (!hasTopBottom || order.some((i) => slot(i) === 'onepiece' && must.includes(i.id)));
+  for (const it of order) {
+    const s = slot(it);
+    if (s === 'onepiece' && (!preferDress || count('onepiece'))) continue;
+    if (s === 'bottom' && (preferDress || count('bottom'))) continue;
+    if (s === 'top' && count('top') >= 2) continue;
+    if (s === 'shoes' && count('shoes')) continue;
+    if (s === 'outer' && count('outer') >= 2) continue;
+    if (s === 'head' && count('head')) continue;
+    if (s === 'side' && count('side') >= 3) continue;
+    if (s === 'legwear' && count('legwear', (i) => (i.category === 'tights') === (it.category === 'tights'))) continue;
+    keep.push(it);
+  }
+  // pėdkelnės/kojinės su kelnėmis – lauk
+  if (keep.some((i) => i.category === 'pants')) for (let k = keep.length - 1; k >= 0; k--) if (slot(keep[k]) === 'legwear' && !must.includes(keep[k].id)) keep.splice(k, 1);
+  return keep.map((i) => i.id);
 }
 
 // ---- Vaizdas "ant manekeno" arba "ant manęs" ----
@@ -431,6 +464,7 @@ export async function chatAboutOutfit({ outfit, message, items, categories, weat
   ], 'chat');
   const valid = new Set(items.map((i) => i.id));
   out.itemIds = (out.itemIds || []).filter((id) => valid.has(id));
+  if (out.itemIds.length) out.itemIds = sanitizeOutfit(out.itemIds, items, categories);
   if (!out.itemIds.length) out.changed = false;
   if (!['mannequin', 'me'].includes(out.render)) out.render = null;
   out.learned = typeof out.learned === 'string' ? out.learned.trim() : '';
