@@ -182,15 +182,51 @@ function wardrobeFor(items, categories, wearStats) {
   });
 }
 
+// ---- Derinio patikra: logika, kurios DI kartais nepaiso ----
+function checkOutfit(ids, items, categories, weather) {
+  const catById = Object.fromEntries(categories.map((c) => [c.id, c]));
+  const its = ids.map((id) => items.find((i) => i.id === id)).filter(Boolean);
+  const slot = (it) => catById[it.category]?.slot || 'top';
+  const by = {};
+  for (const it of its) (by[slot(it)] = by[slot(it)] || []).push(it);
+  const n = (s) => (by[s] || []).length;
+  const name = (it) => it.name || catById[it.category]?.label || 'rūbas';
+  const problems = [];
+  if (n('onepiece') > 1) problems.push('Fite yra kelios suknelės – palik vieną.');
+  if (n('onepiece') && n('bottom')) problems.push('Suknelė ir apačia (kelnės/sijonas) kartu netinka – rinkis viena arba kita.');
+  if (n('bottom') > 1) problems.push(`Fite kelios apačios (${by.bottom.map(name).join(', ')}) – palik vieną.`);
+  if (!n('onepiece') && !n('bottom') && items.some((i) => ['bottom', 'onepiece'].includes(slot(i)))) problems.push('Trūksta apačios (kelnių ar sijono) arba suknelės.');
+  if (!n('onepiece') && !n('top') && items.some((i) => slot(i) === 'top')) problems.push('Trūksta viršaus (palaidinės, megztinio ar maikutės).');
+  if (n('top') > 2) problems.push('Per daug viršų – daugiausiai du sluoksniai (pvz. marškiniai po megztiniu).');
+  if (n('shoes') > 1) problems.push('Fite kelios poros batų – palik vieną.');
+  if (n('outer') > 2) problems.push('Per daug viršutinių rūbų.');
+  if (n('head') > 1) problems.push('Per daug galvos aksesuarų.');
+  if (n('side') > 3) problems.push('Per daug aksesuarų – daugiausiai 3.');
+  const leg = by.legwear || [];
+  if (leg.filter((i) => i.category === 'tights').length > 1) problems.push('Kelios pėdkelnės vienu metu – palik vienas.');
+  if (leg.filter((i) => i.category !== 'tights').length > 1) problems.push('Kelios poros kojinių – palik vieną.');
+  if (n('shoes') === 0 && items.some((i) => slot(i) === 'shoes')) problems.push('Pridėk batus.');
+  const fm = String(weather || '').match(/jaučiasi (-?\d+)/);
+  const cold = fm ? +fm[1] < 10 : false;
+  if (cold && !n('outer') && items.some((i) => slot(i) === 'outer')) problems.push('Lauke šalta – pridėk viršutinį rūbą (striukę, paltą ar švarką).');
+  const sport = its.filter((i) => /^sport_/.test(i.category));
+  if (sport.length && sport.length < its.length - n('shoes') - n('side') - n('legwear') - n('head')) problems.push('Sportiniai rūbai sumaišyti su nesportiniais – rinkis vienos stilistikos derinį, nebent ji to aiškiai prašo.');
+  return problems;
+}
+
 export async function styleOutfit({ vibe, items, categories, weather, wearStats, exclude = [], style = null, must = [] }) {
   const wardrobe = wardrobeFor(items, categories, wearStats);
   const today = new Date().toISOString().slice(0, 10);
-  const out = await chatJSON([
+  const messages = [
     {
       role: 'system',
       content:
         STYLIST +
-        'Atsakyk TIK JSON: {"title": "trumpas žaismingas pavadinimas", "itemIds": [...], ' +
+        'DARBO EIGA: 1) perskaityk jos norą ir orus; 2) pasirink pagrindą – suknelę ARBA viršų + apačią; ' +
+        '3) pridėk sluoksnius pagal orus; 4) batus; 5) pėdkelnes/kojines tik jei tinka prie apačios ir orų; 6) 0–2 aksesuarus. ' +
+        'Kiekvienas rūbas turi derėti spalva, stiliumi ir proga su kitais – jokių atsitiktinių derinių (pvz. sportinės kelnės su vakarine palaidine). ' +
+        'Nedėk kelių kelnių, kelių sijonų, kelių porų batų ar suknelės kartu su kelnėmis. ' +
+        'Atsakyk TIK JSON: {"planas": "1–2 sakiniai sau: kokia idėja, pagrindas ir spalvos", "title": "trumpas žaismingas pavadinimas", "itemIds": [...], ' +
         '"explanation": "2–3 sakiniai kodėl šis derinys", "tip": "1 stiliaus patarimas (pvz. kaip susegti, kokį makiažą)", ' +
         '"gap": "" arba vienu trumpu sakiniu, ko spintoje tikrai trūksta šiems orams ar progai (be priekaištų)}. ' +
         'Jei spintoje trūksta būtinų rūbų, vis tiek pasiūlyk geriausią įmanomą. Rūbus iš "butinai_itraukti" privalai įtraukti.',
@@ -207,10 +243,26 @@ export async function styleOutfit({ vibe, items, categories, weather, wearStats,
         spinta: wardrobe,
       }),
     },
-  ]);
+  ];
   const valid = new Set(items.map((i) => i.id));
-  out.itemIds = (out.itemIds || []).filter((id) => valid.has(id));
-  for (const id of must) if (valid.has(id) && !out.itemIds.includes(id)) out.itemIds.push(id);
+  const clean = (o) => {
+    o.itemIds = [...new Set((o.itemIds || []).filter((id) => valid.has(id)))];
+    for (const id of must) if (valid.has(id) && !o.itemIds.includes(id)) o.itemIds.push(id);
+    return o;
+  };
+  let out = clean(await chatJSON(messages, 'chat'));
+  // jei derinys nelogiškas – vieną kartą paprašom pataisyti
+  const problems = checkOutfit(out.itemIds, items, categories, weather);
+  if (problems.length) {
+    try {
+      const fixed = clean(await chatJSON([
+        ...messages,
+        { role: 'assistant', content: JSON.stringify(out) },
+        { role: 'user', content: 'Šis derinys turi klaidų: ' + problems.join(' ') + ' Pataisyk ir grąžink visą JSON iš naujo tuo pačiu formatu.' },
+      ], 'chat'));
+      if (fixed.itemIds.length && checkOutfit(fixed.itemIds, items, categories, weather).length <= problems.length) out = fixed;
+    } catch (e) { console.warn('fix', e); }
+  }
   if (!out.itemIds.length) throw new Error('Stilistei nepavyko parinkti rūbų. Pabandyk kitaip aprašyti norą.');
   return out;
 }
