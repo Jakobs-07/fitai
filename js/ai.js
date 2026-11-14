@@ -200,6 +200,7 @@ function checkOutfit(ids, items, categories, weather) {
   if (!n('onepiece') && !n('bottom') && items.some((i) => ['bottom', 'onepiece'].includes(slot(i)))) problems.push('Trūksta apačios (kelnių ar sijono) arba suknelės.');
   if (!n('onepiece') && !n('top') && items.some((i) => slot(i) === 'top')) problems.push('Trūksta viršaus (palaidinės, megztinio ar maikutės).');
   if (n('top') > 2) problems.push('Per daug viršų – daugiausiai du sluoksniai (pvz. marškiniai po megztiniu).');
+  else if (n('top') === 2 && by.top.filter((i) => i.category === 'sweaters').length !== 1) problems.push(`Du viršai kartu (${by.top.map(name).join(' ir ')}) – taip nedėvima. Du viršai galimi tik kai vienas yra megztinis, o kitas plonas rūbas po juo. Palik vieną.`);
   if (n('shoes') > 1) problems.push('Fite kelios poros batų – palik vieną.');
   if (n('outer') > 2) problems.push('Per daug viršutinių rūbų.');
   if (n('head') > 1) problems.push('Per daug galvos aksesuarų.');
@@ -226,7 +227,7 @@ export async function styleOutfit({ vibe, items, categories, weather, wearStats,
       role: 'system',
       content:
         STYLIST +
-        'DARBO EIGA: 1) perskaityk jos norą ir orus; 2) pasirink pagrindą – suknelę ARBA viršų + apačią; ' +
+        'DARBO EIGA: 1) perskaityk jos norą ir orus; 2) pasirink pagrindą – suknelę ARBA VIENĄ viršų + apačią (antras viršus galimas tik megztinis ant plonesnio viršaus); ' +
         '3) pridėk sluoksnius pagal orus; 4) batus; 5) pėdkelnes/kojines tik jei tinka prie apačios ir orų; 6) 0–2 aksesuarus. ' +
         'Kiekvienas rūbas turi derėti spalva, stiliumi ir proga su kitais – jokių atsitiktinių derinių (pvz. sportinės kelnės su vakarine palaidine). ' +
         'Nedėk kelių kelnių, kelių sijonų, kelių porų batų ar suknelės kartu su kelnėmis. ' +
@@ -287,7 +288,12 @@ function sanitizeOutfit(ids, items, categories, must = []) {
     const s = slot(it);
     if (s === 'onepiece' && (!preferDress || count('onepiece'))) continue;
     if (s === 'bottom' && (preferDress || count('bottom'))) continue;
-    if (s === 'top' && count('top') >= 2) continue;
+    if (s === 'top') {
+      const tops = keep.filter((i) => slot(i) === 'top');
+      // antras viršus – tik megztinis ant plono viršaus (arba atvirkščiai)
+      if (tops.length >= 2) continue;
+      if (tops.length === 1 && (tops[0].category === 'sweaters') === (it.category === 'sweaters')) continue;
+    }
     if (s === 'shoes' && count('shoes')) continue;
     if (s === 'outer' && count('outer') >= 2) continue;
     if (s === 'head' && count('head')) continue;
