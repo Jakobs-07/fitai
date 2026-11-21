@@ -1,7 +1,8 @@
 // Paprasta IndexedDB saugykla. Viskas lieka telefone.
 const DB_NAME = 'fitai';
-const DB_VERSION = 1;
-const STORES = ['items', 'outfits', 'worn', 'kv'];
+const DB_VERSION = 2;
+const STORES = ['items', 'outfits', 'worn', 'kv', 'pending'];
+const BACKUP_STORES = ['items', 'outfits', 'worn', 'kv'];
 
 let dbPromise;
 
@@ -144,7 +145,7 @@ async function decode(obj) {
 
 export async function exportAll() {
   const data = { app: 'fitai', version: 1, exportedAt: new Date().toISOString() };
-  for (const s of STORES) {
+  for (const s of BACKUP_STORES) {
     let rows = await db.all(s);
     if (s === 'kv') rows = rows.filter((r) => r.key !== 'apiKey'); // raktas į kopiją nekeliauja
     data[s] = await encode(rows);
@@ -155,7 +156,7 @@ export async function exportAll() {
 export async function importAll(file) {
   const data = JSON.parse(await file.text());
   if (data.app !== 'fitai') throw new Error('Tai ne Fitai kopijos failas');
-  for (const s of STORES) {
+  for (const s of BACKUP_STORES) {
     if (!data[s]) continue;
     const rows = await decode(data[s]);
     for (const row of rows) await db.put(s, row);

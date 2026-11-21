@@ -625,16 +625,16 @@ function viewSpinta() {
       return `<button class="sub ${S.fCat === c.id ? 'on' : ''}" data-act="fcat" data-v="${c.id}">${esc(c.label)}<sup>${n}</sup></button>`;
     }).join('')}</nav>` : ''}`;
 
-  if (!items.length && !S.queue.length) {
+  if (!items.length && !S.queue.length && !S.preparing) {
     const where = S.fCat ? catById(S.fCat)?.label : GROUPS.find((g) => g.id === S.fGroup)?.label;
     html += `<div class="card empty"><div class="big">${S.items.length ? 'Tuščia' : 'Pradėkim'}</div><h3>${S.items.length ? `${esc(where)} – dar nieko` : 'Spinta laukia rūbų'}</h3>
       <p>Spausk + ir nufotografuok rūbą arba pasirink kelias nuotraukas iš galerijos. Fonas iškerpamas automatiškai.</p>
       <button class="btn primary" data-act="add">Pridėti rūbų</button></div>`;
   } else {
-    if (S.queue.length) html += uploadBannerHTML();
+    if (S.queue.length || S.preparing) html += uploadBannerHTML();
     html += `<div class="grid">`;
-    for (const q of S.queue) {
-      html += `<div class="tile" data-q="${q.id}"><div class="ph-wrap"><img class="ph" src="${q.preview}" alt=""></div><div class="cap">Įkeliama</div>
+    for (const q of S.queue.slice(0, 3)) {
+      html += `<div class="tile" data-q="${q.id}"><div class="ph-wrap">${q.preview ? `<img class="ph" src="${q.preview}" alt="">` : ''}</div><div class="cap">Įkeliama</div>
         <div class="proc"><span class="lbl">${esc(q.label)}</span><div class="bar"><i style="width:${Math.round(q.p * 100)}%"></i></div></div></div>`;
     }
     for (const it of items) html += S.selecting ? tileHTML(it, '', 'sel-item', S.sel.has(it.id)) : tileHTML(it);
@@ -919,12 +919,33 @@ fileInput.addEventListener('change', async () => {
     return;
   }
   const single = files.length === 1;
-  if (!S.queueRunning) { S.batch = { total: 0, done: 0, ids: [] }; }
+  if (!S.queueRunning && !S.preparing) { S.batch = { total: 0, done: 0, ids: [] }; }
   S.batch.total += files.length;
-  for (const f of files) S.queue.push({ id: uid(), file: f, label: 'Laukia', p: 0, preview: URL.createObjectURL(f), single });
   if (S.tab !== 'spinta') location.hash = '#spinta';
-  else rerender();
-  runQueue();
+  // Nuotraukas iškart sumažinam ir išsaugom telefone: mažiau atminties, o jei programėlė persikraus – įkėlimas tęsis
+  S.preparing = (S.preparing || 0) + files.length;
+  S.prepDone = S.prepDone || 0;
+  rerender();
+  const cat = defaultCategory();
+  let k = 0;
+  for (const f of files) {
+    try {
+      // 1) pirmiausia – originalas į telefono atmintį (greita), kad niekas nedingtų
+      const row = { id: uid(), raw: f, cat, single, createdAt: Date.now() + k++ };
+      await db.put('pending', row);
+      S.queue.push({ id: row.id, raw: f, label: 'Laukia', p: 0, preview: '', single, cat });
+    } catch (e) {
+      console.warn('prep', e);
+      S.batch.total--;
+    }
+    S.prepDone++;
+    updateBanner();
+    if (!S.queueRunning) runQueue();
+  }
+  S.preparing -= files.length;
+  if (!S.preparing) S.prepDone = 0;
+  updateBanner();
+  if (!S.queueRunning) runQueue(); // užbaigti partiją (peržiūra), jei eilė jau tuščia
 });
 
 function defaultCategory() {
@@ -946,11 +967,17 @@ function uploadBannerHTML() {
   const b = S.batch || { total: S.queue.length, done: 0 };
   const st = stageOf(q?.label);
   const steps = ['Karpomas fonas', 'Taisoma šviesa', S.keyOk ? 'DI atpažįsta' : 'Saugoma'];
+  const prep = S.preparing ? ` · ruošiama ${S.prepDone}/${S.preparing}` : '';
   return `<div class="up-banner" id="upBanner">
-    <div class="row" style="justify-content:space-between"><span class="label">Įkeliama ${Math.min(b.done + 1, b.total)} iš ${b.total}</span><span class="label">${Math.round(((b.done + (q?.p || 0)) / Math.max(1, b.total)) * 100)}%</span></div>
+    <div class="row" style="justify-content:space-between"><span class="label">Įkeliama ${Math.min(b.done + 1, b.total)} iš ${b.total}${prep}</span><span class="label">${Math.round(((b.done + (q?.p || 0)) / Math.max(1, b.total)) * 100)}%</span></div>
     <ol class="up-steps">${steps.map((t, i) => `<li class="${i < st ? 'done' : i === st ? 'on' : ''}">${t}</li>`).join('')}</ol>
     <div class="bar"><i style="width:${((b.done + (q?.p || 0)) / Math.max(1, b.total)) * 100}%"></i></div>
     <span class="small muted">Gali naršyti toliau – baigus parodysiu visus naujus rūbus peržiūrai.</span></div>`;
+}
+function updateBanner() {
+  const ban = document.getElementById('upBanner');
+  if (ban) ban.outerHTML = uploadBannerHTML();
+  else if (S.tab === 'spinta' && (S.queue.length || S.preparing)) rerender();
 }
 function updateQueueTile(q) {
   const ban = document.getElementById('upBanner');
@@ -971,7 +998,9 @@ async function runQueue() {
     const q = S.queue[0];
     try {
       q.label = 'Ruošiama'; q.p = 0.05; updateQueueTile(q);
-      const original = await resize(q.file, 1400, 'image/jpeg', 0.85);
+      // 2) sumažinam tik dabar, po vieną – mažiau atminties
+      const original = q.original || (await resize(q.raw, 1400, 'image/jpeg', 0.85));
+      q.raw = null;
       let image = original, cutout = false;
       if (await getSetting('bgRemoval', true)) {
         try {
@@ -990,7 +1019,7 @@ async function runQueue() {
       }
       const item = {
         id: q.id, image, original, cutout, createdAt: Date.now(),
-        category: defaultCategory(), name: '', colors: [], seasons: [], occasions: [], warmth: 3, description: '', cutBad: !!q.cutBad,
+        category: q.cat || defaultCategory(), name: '', colors: [], seasons: [], occasions: [], warmth: 3, description: '', cutBad: !!q.cutBad,
       };
       if (useKey) {
         q.label = 'DI atpažįsta'; q.p = 0.8; updateQueueTile(q);
@@ -1018,11 +1047,12 @@ async function runQueue() {
       console.error(e);
       toast('Nepavyko įkelti nuotraukos: ' + e.message);
     }
-    URL.revokeObjectURL(q.preview);
+    try { await db.del('pending', q.id); } catch (_) {}
     S.queue.shift();
     if (S.tab === 'spinta') await rerender();
   }
   S.queueRunning = false;
+  if (S.preparing) return; // dar ruošiamos kitos nuotraukos – baigsim, kai visos bus apdorotos
   const ids = S.batch?.ids || [];
   S.batch = null;
   const mk = [[50, '50 rūbų spintoje. Tikra kolekcija.'], [25, '25 rūbai – deriniai darosi įdomesni.'], [10, 'Dešimt rūbų. Stilistė jau turi iš ko rinktis.'], [1, 'Pirmas rūbas spintoje. Gera pradžia.']].find(([k]) => S.items.length >= k);
@@ -1040,7 +1070,7 @@ function openReview(ids) {
     <div class="stack">
       <p class="small muted" style="margin:0">${S.keyOk ? 'DI jau užpildė pavadinimus ir kategorijas.' : 'Rūbai jau spintoje.'} Pataisyk tik tai, kas neteisinga – pakeitimai saugomi iškart.</p>
       <div class="rv-list">${its.map((it) => `<div class="rv-row" data-id="${it.id}">
-        <div class="rv-ph" data-act="item" data-id="${it.id}"><img src="${blobURL(it.image)}" alt=""></div>
+        <div class="rv-ph" data-act="item" data-id="${it.id}"><img src="${blobURL(it.image)}" alt="" loading="lazy" decoding="async"></div>
         <div class="rv-f"><input class="input rv-name" value="${esc(it.name)}" placeholder="Pavadinimas">
           <select class="input rv-cat">${categorySelect(it.category)}</select></div>
         <button class="rv-del" data-act="rv-del" data-id="${it.id}" aria-label="Ištrinti">×</button></div>`).join('')}</div>
@@ -2072,12 +2102,25 @@ function startCoach(first = false) {
   });
 }
 
+async function resumePending() {
+  let rows = [];
+  try { rows = await db.all('pending'); } catch (e) { console.warn('pending', e); }
+  if (!rows.length) return;
+  rows.sort((a, b) => a.createdAt - b.createdAt);
+  S.batch = { total: rows.length, done: 0, ids: [] };
+  for (const r of rows) S.queue.push({ id: r.id, original: r.original, raw: r.raw, label: 'Laukia', p: 0, preview: '', single: false, cat: r.cat });
+  toast(`Tęsiamas įkėlimas: liko ${rows.length} ${plural(rows.length, 'rūbas', 'rūbai', 'rūbų')}`, 4000);
+  if (S.tab === 'spinta') rerender();
+  runQueue();
+}
+
 async function init() {
   S.tab = location.hash.slice(1) || 'fitas';
   startTipRotation();
   await loadAll();
   await render();
   if (!S.me.done) startOnboarding(0);
+  resumePending();
   requestPersist();
   loadWeather();
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
