@@ -919,7 +919,7 @@ fileInput.addEventListener('change', async () => {
     return;
   }
   const single = files.length === 1;
-  if (!S.queueRunning && !S.preparing) { S.batch = { total: 0, done: 0, ids: [] }; }
+  if (!S.queueRunning && !S.preparing) { S.batch = { total: 0, done: 0, ids: [] }; setSetting('batchIds', []).catch(() => {}); }
   S.batch.total += files.length;
   if (S.tab !== 'spinta') location.hash = '#spinta';
   // Nuotraukas iškart sumažinam ir išsaugom telefone: mažiau atminties, o jei programėlė persikraus – įkėlimas tęsis
@@ -1045,7 +1045,8 @@ async function runQueue() {
       await db.put('items', item);
       S.items.push(item);
       done++; lastId = item.id; wasSingle = q.single;
-      if (S.batch) { S.batch.done++; S.batch.ids.push(item.id); }
+      // partijos sąrašas saugomas telefone – kad persikrovus peržiūroje būtų visi rūbai
+      if (S.batch) { S.batch.done++; S.batch.ids.push(item.id); setSetting('batchIds', S.batch.ids).catch(() => {}); }
     } catch (e) {
       console.error(e);
       toast('Nepavyko įkelti nuotraukos: ' + e.message);
@@ -1059,6 +1060,7 @@ async function runQueue() {
   releaseCutter(); // atlaisvinam fono karpymo modelio atmintį // dar ruošiamos kitos nuotraukos – baigsim, kai visos bus apdorotos
   const ids = S.batch?.ids || [];
   S.batch = null;
+  setSetting('batchIds', []).catch(() => {});
   const mk = [[50, '50 rūbų spintoje. Tikra kolekcija.'], [25, '25 rūbai – deriniai darosi įdomesni.'], [10, 'Dešimt rūbų. Stilistė jau turi iš ko rinktis.'], [1, 'Pirmas rūbas spintoje. Gera pradžia.']].find(([k]) => S.items.length >= k);
   if (mk && done) milestone('items' + mk[0], mk[1]);
   if (done === 1 && wasSingle) openItem(lastId, true);
@@ -2110,9 +2112,16 @@ async function resumePending() {
   // tik raktai – pačios nuotraukos skaitomos po vieną, kai ateina jų eilė
   let rows = [];
   try { rows = await db.keys('pending'); } catch (e) { console.warn('pending', e); }
-  if (!rows.length) return;
+  let prev = [];
+  try { prev = (await getSetting('batchIds', [])).filter((id) => itemById(id)); } catch (_) {}
+  if (!rows.length) {
+    // programėlė persikrovė, kai visi jau buvo įkelti, bet peržiūra dar nerodyta
+    setSetting('batchIds', []).catch(() => {});
+    if (prev.length > 1) openReview(prev);
+    return;
+  }
   rows.sort();
-  S.batch = { total: rows.length, done: 0, ids: [] };
+  S.batch = { total: rows.length + prev.length, done: prev.length, ids: prev };
   for (const id of rows) S.queue.push({ id, label: 'Laukia', p: 0, preview: '', single: false });
   toast(`Tęsiamas įkėlimas: liko ${rows.length} ${plural(rows.length, 'rūbas', 'rūbai', 'rūbų')}`, 4000);
   if (S.tab === 'spinta') rerender();

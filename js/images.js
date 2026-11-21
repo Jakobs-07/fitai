@@ -378,8 +378,27 @@ export async function cleanCutout(blob) {
   // vidutinis kiekvieno gabalo neperšviečiamumas: blyškios dėmės (popieriaus tekstūra, šešėliai) – ne rūbas
   const asum = new Float64Array(sizes.length);
   for (let i = 0; i < lab.length; i++) if (lab[i]) asum[lab[i]] += d[i * 4 + 3];
+  // kiekvieno gabalo centras ir didžiausio gabalo (rūbo) ribos
+  const big = sizes.indexOf(biggest);
+  const sx = new Float64Array(sizes.length), sy = new Float64Array(sizes.length);
+  let bx0 = w, by0 = h, bx1 = 0, by1 = 0;
+  for (let i = 0; i < lab.length; i++) {
+    const L = lab[i];
+    if (!L) continue;
+    const x = i % w, y = (i - x) / w;
+    sx[L] += x; sy[L] += y;
+    if (L === big) { if (x < bx0) bx0 = x; if (x > bx1) bx1 = x; if (y < by0) by0 = y; if (y > by1) by1 = y; }
+  }
   const keepLab = new Uint8Array(sizes.length);
-  for (let k = 1; k < sizes.length; k++) keepLab[k] = sizes[k] >= biggest * 0.04 && (sizes[k] === biggest || asum[k] / sizes[k] > 150) ? 1 : 0;
+  for (let k = 1; k < sizes.length; k++) {
+    if (k === big) { keepLab[k] = 1; continue; }
+    if (sizes[k] < biggest * 0.04 || asum[k] / sizes[k] <= 150) continue;
+    // šalia gulintys daiktai (pėdos, batai, pieštukas) – už rūbo ribų, todėl išmetami.
+    // Panašaus dydžio gabalas (antras batas, auskaras) paliekamas.
+    const cx = sx[k] / sizes[k], cy = sy[k] / sizes[k];
+    const inside = cx >= bx0 && cx <= bx1 && cy >= by0 && cy <= by1;
+    keepLab[k] = inside || sizes[k] >= biggest * 0.5 ? 1 : 0;
+  }
   const keep = new Uint8Array(w * h);
   for (let i = 0; i < keep.length; i++) keep[i] = keepLab[lab[i]];
   // 3) užpildom mažas skyles rūbo viduje (pusiau permatomos vietos), didelius tarpus (tarp rankovės ir šono) paliekam
