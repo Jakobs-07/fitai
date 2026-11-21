@@ -1,6 +1,6 @@
 import { db, getSetting, setSetting, uid, requestPersist, exportAll, importAll, migrateBlobs } from './db.js';
 import { DEFAULT_CATEGORIES, GROUPS, SLOTS, SEASONS, OCCASIONS, VIBE_IDEAS } from './data.js';
-import { resize, removeBackground, lastCutBad, blobURL, transformImage, trimTransparent, autoEnhance } from './images.js';
+import { resize, removeBackground, lastCutBad, blobURL, transformImage, trimTransparent, autoEnhance, releaseCutter, repairDeadImages } from './images.js';
 import { tagItem, styleOutfit, renderOutfit, chatAboutOutfit, enhanceItemPhoto, hasKey, testKey, modelsInUse, analyzeSelfie, analyzeBody, createAvatar, aiCutout } from './ai.js';
 import { runOnboarding, runCoach, avatarSVG, avatarPNG, describeMe, bodyForAI, fLoader, startTipRotation, busyOn, busyOff, BODY_TYPES, BUILDS, SEASONS_C } from './profile.js';
 import { getWeather, weatherForAI, findCity } from './weather.js';
@@ -930,10 +930,11 @@ fileInput.addEventListener('change', async () => {
   let k = 0;
   for (const f of files) {
     try {
-      // 1) pirmiausia – originalas į telefono atmintį (greita), kad niekas nedingtų
-      const row = { id: uid(), raw: f, cat, single, createdAt: Date.now() + k++ };
+      // 1) sumažinta kopija į telefono atmintį – kad niekas nedingtų, o atmintyje nelaikytume didelių nuotraukų
+      const original = await resize(f, 1400, 'image/jpeg', 0.85);
+      const row = { id: uid(), original, cat, single, createdAt: Date.now() + k++ };
       await db.put('pending', row);
-      S.queue.push({ id: row.id, raw: f, label: 'Laukia', p: 0, preview: '', single, cat });
+      S.queue.push({ id: row.id, label: 'Laukia', p: 0, preview: '', single, cat });
     } catch (e) {
       console.warn('prep', e);
       S.batch.total--;
@@ -998,9 +999,11 @@ async function runQueue() {
     const q = S.queue[0];
     try {
       q.label = 'Ruošiama'; q.p = 0.05; updateQueueTile(q);
-      // 2) sumažinam tik dabar, po vieną – mažiau atminties
-      const original = q.original || (await resize(q.raw, 1400, 'image/jpeg', 0.85));
-      q.raw = null;
+      // 2) nuotrauką pasiimam iš telefono atminties tik dabar, po vieną
+      const row = await db.get('pending', q.id);
+      if (!row) throw new Error('nuotrauka nerasta');
+      if (row.cat) q.cat = row.cat;
+      const original = row.original || (await resize(row.raw, 1400, 'image/jpeg', 0.85));
       let image = original, cutout = false;
       if (await getSetting('bgRemoval', true)) {
         try {
@@ -1052,7 +1055,8 @@ async function runQueue() {
     if (S.tab === 'spinta') await rerender();
   }
   S.queueRunning = false;
-  if (S.preparing) return; // dar ruošiamos kitos nuotraukos – baigsim, kai visos bus apdorotos
+  if (S.preparing) return;
+  releaseCutter(); // atlaisvinam fono karpymo modelio atmintį // dar ruošiamos kitos nuotraukos – baigsim, kai visos bus apdorotos
   const ids = S.batch?.ids || [];
   S.batch = null;
   const mk = [[50, '50 rūbų spintoje. Tikra kolekcija.'], [25, '25 rūbai – deriniai darosi įdomesni.'], [10, 'Dešimt rūbų. Stilistė jau turi iš ko rinktis.'], [1, 'Pirmas rūbas spintoje. Gera pradžia.']].find(([k]) => S.items.length >= k);
@@ -2103,12 +2107,13 @@ function startCoach(first = false) {
 }
 
 async function resumePending() {
+  // tik raktai – pačios nuotraukos skaitomos po vieną, kai ateina jų eilė
   let rows = [];
-  try { rows = await db.all('pending'); } catch (e) { console.warn('pending', e); }
+  try { rows = await db.keys('pending'); } catch (e) { console.warn('pending', e); }
   if (!rows.length) return;
-  rows.sort((a, b) => a.createdAt - b.createdAt);
+  rows.sort();
   S.batch = { total: rows.length, done: 0, ids: [] };
-  for (const r of rows) S.queue.push({ id: r.id, original: r.original, raw: r.raw, label: 'Laukia', p: 0, preview: '', single: false, cat: r.cat });
+  for (const id of rows) S.queue.push({ id, label: 'Laukia', p: 0, preview: '', single: false });
   toast(`Tęsiamas įkėlimas: liko ${rows.length} ${plural(rows.length, 'rūbas', 'rūbai', 'rūbų')}`, 4000);
   if (S.tab === 'spinta') rerender();
   runQueue();
@@ -2119,6 +2124,7 @@ async function init() {
   startTipRotation();
   await loadAll();
   await render();
+  repairDeadImages(async () => { await loadAll(); await rerender(); });
   if (!S.me.done) startOnboarding(0);
   resumePending();
   requestPersist();

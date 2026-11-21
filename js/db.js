@@ -74,6 +74,7 @@ export const db = {
     packed.__packed = true;
     return tx(store, 'readwrite', (s) => s.put(packed));
   },
+  keys: (store) => tx(store, 'readonly', (s) => s.getAllKeys()),
   del: (store, id) => tx(store, 'readwrite', (s) => s.delete(id)),
 };
 
