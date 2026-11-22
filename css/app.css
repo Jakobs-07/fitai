@@ -689,3 +689,9 @@ input[type=range] { accent-color: var(--wine); width: 100%; }
 .prof-av.av-img { height: 190px; width: auto; }
 img.rb-av { height: 200px; width: auto; border-radius: 2px; }
 .coach-card .row .btn { padding: 12px 16px; }
+
+/* Peržiūra: išmestas rūbas lieka sąraše su „Grąžinti“ */
+.rv-row.out .rv-ph, .rv-row.out .rv-f { opacity: .4; }
+.rv-row.out .rv-f .serif { font-size: 15px; text-decoration: line-through; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rv-row.out .btn.sm { flex: none; min-height: 44px; }
+.bulkbar .btn.sm { min-height: 40px; }

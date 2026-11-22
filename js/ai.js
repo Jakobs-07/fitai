@@ -104,14 +104,34 @@ export async function hasKey() {
 }
 
 // ---- Rūbo atpažinimas iš nuotraukos ----
+// Patikslinimai, kad DI nepainiotų panašių kategorijų (tik standartinėms kategorijoms)
+const CAT_HINTS = {
+  tshirts: 'marškinėliai, topai, berankoviai – plonas trikotažas, be sagų per visą priekį',
+  blouses: 'palaidinės ir marškiniai iš audinio (dažnai su sagomis, apykakle), taip pat bodžiai (vientisas viršus su užsegimu apačioje)',
+  sweaters: 'megztiniai, džemperiai, kardiganai, hudžiai – megztas ar storas minkštas trikotažas; tai NE striukė',
+  pants: 'kelnės, džinsai, tamprės – dvi ilgos klešnės',
+  shorts: 'šortai – dvi trumpos klešnės',
+  skirts: 'sijonai – vienas vamzdis be klešnių, laikosi ant juosmens, be viršutinės dalies; tai NE viršus',
+  dresses: 'suknelės ir kombinezonai – viršus ir apačia kartu, vienas gabalas',
+  jackets: 'striukės – lauko rūbas su užtrauktuku ar spaudėmis, iš neperpučiamo audinio, odos, džinso, pūkinės',
+  coats: 'paltai – ilgas lauko rūbas, dažniausiai žemiau klubų',
+  blazers: 'švarkai – klasikinis kostiumo tipo švarkas su atlapais',
+  shoes: 'batai, sportbačiai, basutės',
+  sport_top: 'sportiniai viršai – sportinės liemenėlės, sportiniai marškinėliai iš techninio audinio',
+  sport_bottom: 'sportinės apačios – sportinės tamprės, sportiniai šortai',
+  socks: 'kojinės', tights: 'pėdkelnės',
+  bags: 'rankinės, kuprinės', jewelry: 'papuošalai, laikrodžiai', hats: 'kepurės', scarves: 'šalikai, skaros', glasses: 'akiniai',
+};
+
 export async function tagItem(blob, categories) {
-  const img = await toDataURLForAI(blob);
-  const catList = categories.map((c) => `${c.id} = ${c.label}`).join('\n');
+  const img = await toDataURLForAI(blob, 640);
+  const catList = categories.map((c) => `${c.id} = ${c.label}${CAT_HINTS[c.id] ? ` (${CAT_HINTS[c.id]})` : ''}`).join('\n');
   const out = await chatJSON([
     {
       role: 'system',
       content:
-        'Tu esi mados ekspertė. Atpažink rūbą nuotraukoje. Atsakyk TIK JSON formatu lietuviškai.',
+        'Tu esi mados ekspertė. Atpažink rūbą nuotraukoje. Atsakyk TIK JSON formatu lietuviškai. ' +
+        'Nuotrauka gali būti pasukta ar apversta (rūbas fotografuotas gulintis) – kategoriją spręsk pagal rūbo formą, ne pagal tai, kaip jis pasuktas.',
     },
     {
       role: 'user',
@@ -120,16 +140,21 @@ export async function tagItem(blob, categories) {
           type: 'text',
           text:
             `Kategorijos (naudok id):\n${catList}\n\n` +
-            `Grąžink JSON: {"category": id, "name": "trumpas pavadinimas, pvz. Balta lininė palaidinė", ` +
+            `Pirma trumpai įvardink, kas tai per rūbas ir kokia jo forma (laukas "what"), tada pasirink kategoriją.\n` +
+            `Laukas "up": kurioje nuotraukos pusėje yra rūbo VIRŠUS, kai jis vilkimas ar laikomas teisingai ` +
+            `(viršui: apykaklė, pečiai; kelnėms ir sijonams: juosmuo; suknelei: pečiai; batams: auliukas/įlipimo anga, padas apačioje; rankinei: rankena). ` +
+            `Reikšmės: "top", "right", "bottom", "left". Jei rūbas jau stovi teisingai arba neaišku – "top".\n\n` +
+            `Grąžink JSON: {"what": "pvz. ilgas plisuotas sijonas", "category": id, "up": "top", "name": "trumpas pavadinimas, pvz. Balta lininė palaidinė", ` +
             `"colors": ["pagrindinės spalvos lietuviškai"], "seasons": [iš: ${SEASONS.join(', ')}], ` +
             `"occasions": [iš: ${OCCASIONS.join(', ')}], "warmth": 1-5 (1 labai plonas, 5 labai šiltas), ` +
             `"description": "1 sakinys apie stilių, medžiagą, kirpimą"}`,
         },
-        { type: 'image_url', image_url: { url: img, detail: 'low' } },
+        { type: 'image_url', image_url: { url: img, detail: 'high' } },
       ],
     },
   ]);
   if (!categories.some((c) => c.id === out.category)) out.category = null;
+  if (!['top', 'right', 'bottom', 'left'].includes(out.up)) out.up = 'top';
   out.seasons = (out.seasons || []).filter((s) => SEASONS.includes(s));
   out.occasions = (out.occasions || []).filter((s) => OCCASIONS.includes(s));
   return out;

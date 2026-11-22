@@ -34,6 +34,7 @@ const S = {
   pendingEnh: {},
   events: [],
   sel: new Set(),
+  secPerItem: 25, // kiek sekundžių vidutiniškai užtrunka vienas rūbas (atnaujinama po įkėlimo)
 };
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -668,25 +669,31 @@ function favCard(o, act = 'open-outfit', selected = false) {
 
 const favList = () => S.outfits.filter((o) => o.favorite).sort((a, b) => b.createdAt - a.createdAt);
 
+const recentList = () => S.outfits.filter((o) => !o.favorite).sort((a, b) => b.createdAt - a.createdAt).slice(0, 20);
+
 function viewMegstami() {
   const favs = favList();
-  const recent = S.outfits.filter((o) => !o.favorite).sort((a, b) => b.createdAt - a.createdAt).slice(0, 20);
+  const recent = recentList();
+  const card = (o) => (S.selecting ? favCard(o, 'fav-sel', S.sel.has(o.id)) : favCard(o));
   let html = `<div class="stack">
     <div class="hello row" style="justify-content:space-between;align-items:flex-end">
       <div><div class="h-title"><em>Mėgstami</em><br>fitai</div><div class="label h-sub">${favs.length} ${plural(favs.length, 'išsaugotas', 'išsaugoti', 'išsaugotų')}</div></div>
-      ${favs.length ? `<button class="btn sm ${S.selecting ? 'dark' : ''}" data-act="select-mode">${S.selecting ? 'Baigti' : 'Žymėti'}</button>` : ''}
+      ${favs.length || recent.length ? `<button class="btn sm ${S.selecting ? 'dark' : ''}" data-act="select-mode">${S.selecting ? 'Baigti' : 'Žymėti'}</button>` : ''}
     </div>`;
   html += favs.length
-    ? `<div class="fav-grid">${favs.map((o) => (S.selecting ? favCard(o, 'fav-sel', S.sel.has(o.id)) : favCard(o))).join('')}</div>`
+    ? `<div class="fav-grid">${favs.map(card).join('')}</div>`
     : `<div class="card empty"><div class="big">Dar nieko</div><h3>Nėra mėgstamų</h3><p>Kai fitas patiks, spausk „Į mėgstamus“ ir jis atsiras čia.</p></div>`;
-  if (recent.length && !S.selecting) html += `<div class="section-head"><h3>Neseniai sukurti</h3><span class="label">${recent.length}</span></div><div class="fav-grid">${recent.map((o) => favCard(o)).join('')}</div>`;
+  if (recent.length) html += `<div class="section-head"><h3>Neseniai sukurti</h3><span class="label">${recent.length}</span></div><div class="fav-grid">${recent.map(card).join('')}</div>`;
   if (S.selecting) {
     const n = S.sel.size;
-    const all = favs.length && favs.every((o) => S.sel.has(o.id));
+    const ids = [...favs, ...recent].map((o) => o.id);
+    const all = ids.length && ids.every((id) => S.sel.has(id));
+    const nFav = favs.filter((o) => S.sel.has(o.id)).length;
     return html + `<div style="height:64px" aria-hidden="true"></div></div><div class="bulkbar">
       <span class="label bb-count">${n ? `Pažymėta: ${n}` : 'Paliesk fitus'}</span>
       <button class="btn sm" data-act="fav-sel-all">${all ? 'Nužymėti' : 'Visus'}</button>
-      <button class="btn sm danger" data-act="fav-unfav" ${n ? '' : 'disabled'}>Pašalinti</button>
+      ${nFav ? `<button class="btn sm" data-act="fav-unfav">Iš mėgstamų</button>` : ''}
+      <button class="btn sm danger" data-act="fav-del" ${n ? '' : 'disabled'}>Ištrinti</button>
     </div>`;
   }
   return html + `</div>`;
@@ -1003,7 +1010,7 @@ function defaultCategory() {
 }
 
 function stageOf(label = '') {
-  if (/DI/.test(label)) return 2;
+  if (/DI|Pasuk/.test(label)) return 2;
   if (/šviesa/i.test(label)) return 1;
   return 0;
 }
@@ -1082,6 +1089,12 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && upEl && !upEl.hidden && !S.uploadWaiting) keepAwake(true);
 });
 
+function etaText(ms, measured) {
+  const min = Math.round(ms / 60000);
+  const t = min < 1 ? 'mažiau nei minutė' : min < 60 ? `apie ${min} min.` : `apie ${Math.floor(min / 60)} val. ${min % 60} min.`;
+  return (measured ? 'Liko ' : 'Užtruks ') + t;
+}
+
 function renderUpload() {
   if (!upEl || upEl.hidden) return;
   if (S.uploadWaiting) {
@@ -1104,7 +1117,10 @@ function renderUpload() {
   const lastId = b.ids[b.ids.length - 1] || '';
   const fresh = b.done - b.start;
   const left = b.total - b.done;
-  const eta = fresh >= 1 && left > 0 ? Math.max(1, Math.round((((Date.now() - b.t0) / fresh) * left) / 60000)) : null;
+  // laikas vienam rūbui: kol nėra savo matavimo, imam praeito įkėlimo vidurkį
+  const per = fresh >= 1 ? (Date.now() - b.t0) / fresh : S.secPerItem * 1000;
+  const leftMs = Math.max(0, left - (q?.p || 0)) * per;
+  const eta = left > 0 ? etaText(leftMs, fresh >= 1) : '';
   const status = S.stopUpload ? 'Stabdoma po šios nuotraukos'
     : q ? `${Math.min(b.done + 1, b.total)}-as rūbas · ${q.label.toLowerCase()}`
     : S.preparing ? `Ruošiamos nuotraukos · ${S.prepDone} iš ${S.preparing}` : 'Baigiama';
@@ -1131,7 +1147,7 @@ function renderUpload() {
   f('of').textContent = `iš ${b.total} įkelta`;
   f('bar').style.width = `${frac * 100}%`;
   f('status').textContent = status;
-  f('eta').textContent = eta ? `Liko apie ${eta} min.` : '';
+  f('eta').textContent = eta;
   [...f('steps').children].forEach((li, i) => { li.className = !q ? '' : i < st ? 'done' : i === st ? 'on' : ''; });
 }
 
@@ -1176,6 +1192,15 @@ async function processItem(q, useKey) {
         warmth: Math.min(5, Math.max(1, parseInt(t.warmth) || 3)),
         description: t.description || '',
       });
+      // DI pasako, kur nuotraukoje rūbo viršus – pasukam, kad rūbas stovėtų teisingai
+      const ops = { right: ['rotL'], bottom: ['rotR', 'rotR'], left: ['rotR'] }[t.up];
+      if (ops) {
+        q.label = 'Pasukama'; renderUpload();
+        for (const op of ops) {
+          item.image = await transformImage(item.image, op);
+          item.original = await transformImage(item.original, op);
+        }
+      }
     } catch (e) {
       console.warn('tag', e);
       if (S.batch && !S.batch.tagWarned) { S.batch.tagWarned = true; toast('DI atpažinti nepavyko: ' + e.message, 5000); }
@@ -1245,6 +1270,10 @@ async function runQueue() {
   S.stopUpload = false;
   const b = S.batch;
   const ids = b?.ids || [];
+  if (b && b.done - b.start >= 3) {
+    S.secPerItem = Math.round((Date.now() - b.t0) / 1000 / (b.done - b.start));
+    setSetting('secPerItem', S.secPerItem).catch(() => {});
+  }
   S.batch = null;
   hideUpload();
   await rerender();
@@ -1259,27 +1288,53 @@ async function runQueue() {
 }
 
 // ---- Naujų rūbų peržiūra: visi nauji rūbai viename sąraše, patvirtinama „Viskas gerai“ ----
+function reviewRow(it, i, removed) {
+  const ph = it.image ? `<img src="${blobURL(it.image)}" alt="" loading="lazy" decoding="async">` : '';
+  if (removed) return `<div class="rv-row out" data-id="${it.id}">
+    <span class="rv-n label">${pad2(i + 1)}</span>
+    <div class="rv-ph">${ph}</div>
+    <div class="rv-f"><span class="serif">${esc(it.name || 'Rūbas')}</span><span class="label">Išmesta</span></div>
+    <button class="btn sm" data-act="rv-undo" data-id="${it.id}">Grąžinti</button></div>`;
+  return `<div class="rv-row" data-id="${it.id}">
+    <span class="rv-n label">${pad2(i + 1)}</span>
+    <button class="rv-ph" data-act="item" data-id="${it.id}" aria-label="Atidaryti rūbą">${ph}</button>
+    <div class="rv-f"><input class="input rv-name" value="${esc(it.name)}" placeholder="Pavadinimas">
+      <select class="input rv-cat">${categorySelect(it.category)}</select>
+      ${it.cutBad && !it.cutout ? '<span class="label rv-warn">Fonas neiškirptas</span>' : ''}</div>
+    <button class="rv-del" data-act="rv-del" data-id="${it.id}" aria-label="Išmesti rūbą">×</button></div>`;
+}
+const reviewDoneLabel = (n) => n ? `Viskas gerai · ${n} ${plural(n, 'rūbas', 'rūbai', 'rūbų')}` : 'Baigti peržiūrą';
+
 function openReview(ids, back = false) {
-  const its = ids.map(itemById).filter(Boolean);
-  if (!its.length) return finishReview();
+  // išmesti rūbai lieka sąraše (su „Grąžinti“), kol peržiūra nebaigta
+  const removed = back && S.review?.removed ? S.review.removed : new Map();
+  const order = back && S.review?.order ? S.review.order : ids;
+  const rows = order.map((id) => (removed.has(id) ? [removed.get(id), true] : [itemById(id), false])).filter(([it]) => it);
+  if (!rows.length) return finishReview();
   const scroll = back ? S.review?.scroll || 0 : 0;
-  const bad = its.filter((it) => it.cutBad && !it.cutout).length;
-  openSheet(`<div class="sheet-top"><h2>Nauji rūbai · ${its.length}</h2><span class="label">Patikrink</span></div>
+  const live = rows.filter(([, r]) => !r).map(([it]) => it);
+  const bad = live.filter((it) => it.cutBad && !it.cutout).length;
+  openSheet(`<div class="sheet-top"><h2>Nauji rūbai · ${rows.length}</h2><span class="label">Patikrink</span></div>
     <div class="stack">
-      <p class="small muted" style="margin:0">Paliesk nuotrauką, kad pažiūrėtum ar pataisytum rūbą. ${S.keyOk ? 'Pavadinimus ir kategorijas užpildė DI.' : 'Pavadinimą ir kategoriją gali pakeisti čia pat.'} Pakeitimai saugomi iškart.</p>
+      <p class="small muted" style="margin:0">Paliesk nuotrauką, kad pažiūrėtum ar pataisytum rūbą. ${S.keyOk ? 'Pavadinimus ir kategorijas užpildė DI.' : 'Pavadinimą ir kategoriją gali pakeisti čia pat.'} × išmeta rūbą, „Grąžinti“ jį sugrąžina.</p>
       ${bad ? `<div class="gap-note warn"><span class="label">${bad} ${plural(bad, 'rūbo', 'rūbų', 'rūbų')} fonas neiškirptas</span>Juos pažymėjome. Atidaryk ir nutrink foną trintuku arba palik taip.</div>` : ''}
-      <div class="rv-list">${its.map((it, i) => `<div class="rv-row" data-id="${it.id}">
-        <span class="rv-n label">${pad2(i + 1)}</span>
-        <button class="rv-ph" data-act="item" data-id="${it.id}" aria-label="Atidaryti rūbą">${it.image ? `<img src="${blobURL(it.image)}" alt="" loading="lazy" decoding="async">` : ''}</button>
-        <div class="rv-f"><input class="input rv-name" value="${esc(it.name)}" placeholder="Pavadinimas">
-          <select class="input rv-cat">${categorySelect(it.category)}</select>
-          ${it.cutBad && !it.cutout ? '<span class="label rv-warn">Fonas neiškirptas</span>' : ''}</div>
-        <button class="rv-del" data-act="rv-del" data-id="${it.id}" aria-label="Ištrinti rūbą">×</button></div>`).join('')}</div>
-      <div class="rv-done"><button class="btn primary block" data-act="rv-done">Viskas gerai · ${its.length} ${plural(its.length, 'rūbas', 'rūbai', 'rūbų')}</button></div>
+      <div class="rv-list">${rows.map(([it, r], i) => reviewRow(it, i, r)).join('')}</div>
+      <div class="rv-done"><button class="btn primary block" data-act="rv-done">${reviewDoneLabel(live.length)}</button></div>
     </div>`);
-  S.review = { ids: its.map((i) => i.id), scroll };
+  S.review = { ids: live.map((i) => i.id), order: rows.map(([it]) => it.id), removed, scroll };
   S.inReview = true;
   $('#sheet').scrollTop = scroll;
+}
+// Pakeičia vieną peržiūros eilutę (išmesta ↔ grąžinta) ir atnaujina skaičių mygtuke
+function reviewRowSwap(id, removed) {
+  const r = S.review;
+  r.ids = r.order.filter((x) => !r.removed.has(x));
+  setSetting('batchIds', r.ids).catch(() => {});
+  const row = $(`.rv-row[data-id="${id}"]`);
+  const it = removed ? r.removed.get(id) : itemById(id);
+  if (row && it) row.outerHTML = reviewRow(it, r.order.indexOf(id), removed);
+  const b = $('[data-act="rv-done"]');
+  if (b) b.textContent = reviewDoneLabel(r.ids.length);
 }
 function finishReview() {
   const n = S.review?.ids.length || 0;
@@ -1773,9 +1828,10 @@ const actions = {
   async 'del-item'() {
     const id = $('#itemForm').dataset.id;
     if (!confirm('Ištrinti šį rūbą iš spintos?')) return;
+    const it = itemById(id);
     await db.del('items', id);
     S.items = S.items.filter((i) => i.id !== id);
-    if (S.review) S.review.ids = S.review.ids.filter((x) => x !== id);
+    if (S.review && it) { S.review.removed.set(id, it); S.review.ids = S.review.ids.filter((x) => x !== id); }
     sheetBack();
     toast('Ištrinta');
     rerender();
@@ -2033,17 +2089,22 @@ const actions = {
   },
   async 'rv-del'(el) {
     const id = el.dataset.id;
+    const it = itemById(id);
+    if (!it || !S.review) return;
     await db.del('items', id);
     S.items = S.items.filter((i) => i.id !== id);
-    el.closest('.rv-row').remove();
-    if (S.review) {
-      S.review.ids = S.review.ids.filter((x) => x !== id);
-      setSetting('batchIds', S.review.ids).catch(() => {});
-      if (!S.review.ids.length) return finishReview();
-      const b = $('[data-act="rv-done"]');
-      if (b) b.textContent = `Viskas gerai · ${S.review.ids.length} ${plural(S.review.ids.length, 'rūbas', 'rūbai', 'rūbų')}`;
-    }
-    toast('Ištrinta');
+    S.review.removed.set(id, it); // laikom atmintyje, kad būtų galima grąžinti
+    reviewRowSwap(id, true);
+    if (S.tab === 'spinta') { const y = window.scrollY; view.innerHTML = await viewSpinta(); window.scrollTo(0, y); }
+  },
+  async 'rv-undo'(el) {
+    const id = el.dataset.id;
+    const it = S.review?.removed.get(id);
+    if (!it) return;
+    await db.put('items', it);
+    S.items.push(it);
+    S.review.removed.delete(id);
+    reviewRowSwap(id, false);
     if (S.tab === 'spinta') { const y = window.scrollY; view.innerHTML = await viewSpinta(); window.scrollTo(0, y); }
   },
   onboard(el) {
@@ -2206,21 +2267,31 @@ const actions = {
     rerender();
   },
   'fav-sel-all'() {
-    const ids = favList().map((o) => o.id);
+    const ids = [...favList(), ...recentList()].map((o) => o.id);
     const all = ids.every((id) => S.sel.has(id));
     ids.forEach((id) => (all ? S.sel.delete(id) : S.sel.add(id)));
     rerender();
   },
   async 'fav-unfav'() {
-    const n = S.sel.size;
-    if (!n || !confirm(`Pašalinti ${n} ${plural(n, 'fitą', 'fitus', 'fitų')} iš mėgstamų? Patys fitai nebus ištrinti.`)) return;
-    for (const id of S.sel) {
-      const o = outfitById(id);
-      if (o) { o.favorite = false; await saveOutfit(o); }
-    }
+    const favs = [...S.sel].map(outfitById).filter((o) => o?.favorite);
+    const n = favs.length;
+    if (!n || !confirm(`Pašalinti ${n} ${plural(n, 'fitą', 'fitus', 'fitų')} iš mėgstamų? Patys fitai liks tarp neseniai sukurtų.`)) return;
+    for (const o of favs) { o.favorite = false; await saveOutfit(o); }
     S.sel.clear();
     S.selecting = false;
     toast(`Pašalinta iš mėgstamų: ${n}`);
+    rerender();
+  },
+  async 'fav-del'() {
+    const ids = [...S.sel].filter(outfitById);
+    const n = ids.length;
+    if (!n || !confirm(`Ištrinti ${n} ${plural(n, 'fitą', 'fitus', 'fitų')}? Rūbai spintoje liks, dings tik šie deriniai.`)) return;
+    for (const id of ids) await db.del('outfits', id);
+    S.outfits = S.outfits.filter((o) => !ids.includes(o.id));
+    if (ids.includes(S.currentId)) S.currentId = null;
+    S.sel.clear();
+    S.selecting = false;
+    toast(`Ištrinta: ${n}`);
     rerender();
   },
   'sel-all'() {
@@ -2332,6 +2403,7 @@ async function loadAll() {
   S.events = (await getSetting('styleEvents')) || [];
   S.me = (await getSetting('me')) || {};
   S.hintDl = !!(await getSetting('hintDl'));
+  S.secPerItem = (await getSetting('secPerItem')) || 25;
 }
 
 // ---- Orų langas: visa diena ----
