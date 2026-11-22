@@ -3,7 +3,7 @@ import { DEFAULT_CATEGORIES, GROUPS, SLOTS, SEASONS, OCCASIONS, VIBE_IDEAS } fro
 import { resize, removeBackground, lastCutBad, blobURL, transformImage, trimTransparent, autoEnhance, releaseCutter, repairDeadImages } from './images.js';
 import { tagItem, styleOutfit, renderOutfit, chatAboutOutfit, enhanceItemPhoto, hasKey, testKey, modelsInUse, analyzeSelfie, analyzeBody, createAvatar, aiCutout } from './ai.js';
 import { runOnboarding, runCoach, avatarSVG, avatarPNG, describeMe, bodyForAI, fLoader, startTipRotation, busyOn, busyOff, BODY_TYPES, BUILDS, SEASONS_C } from './profile.js';
-import { getWeather, weatherForAI, findCity } from './weather.js';
+import { getWeather, getWeatherDay, weatherForAI, findCity } from './weather.js';
 
 // ================= Būsena =================
 const S = {
@@ -114,14 +114,25 @@ function openSheet(html) {
   $('#sheetBackdrop').hidden = false;
   sh.scrollTop = 0;
   document.body.style.overflow = 'hidden';
+  S.inReview = false;
+  S.sheetFromReview = false;
 }
 function closeSheet() {
   $('#sheet').hidden = true;
   $('#sheetBackdrop').hidden = true;
   document.body.style.overflow = '';
+  S.inReview = false;
+  S.sheetFromReview = false;
+  S.review = null; // peržiūros sąrašas lieka telefone (batchIds) ir atsiras kitą kartą
 }
-$('#sheetBackdrop').addEventListener('click', closeSheet);
-const sheetTop = (title) => `<div class="sheet-top"><h2>${title}</h2><button class="x" data-act="close">Uždaryti</button></div>`;
+// „Uždaryti“: jei rūbas atidarytas iš naujų rūbų peržiūros – grįžtam į tą sąrašą toje pačioje vietoje
+function sheetBack() {
+  if (S.inReview) return; // peržiūrą uždaro tik „Viskas gerai“
+  if (S.sheetFromReview && S.review) return openReview(S.review.ids, true);
+  closeSheet();
+}
+$('#sheetBackdrop').addEventListener('click', sheetBack);
+const sheetTop = (title, closeLabel = 'Uždaryti') => `<div class="sheet-top"><h2>${title}</h2><button class="x" data-act="close">${closeLabel}</button></div>`;
 
 // ================= Outfito vaizdas =================
 function orderedItems(itemIds) {
@@ -555,12 +566,13 @@ function viewFitas() {
 
   if (S.weather) {
     const w = S.weather;
-    html += `<div class="weather-box panel-wine">
+    html += `<button class="weather-box panel-wine" data-act="weather" aria-label="Rodyti visos dienos orus">
       <div><div class="label" style="margin-bottom:10px">${esc(w.place)} · šiandien</div><div class="t">${w.temp}°</div></div>
       <div style="text-align:right"><div class="serif" style="font-size:20px">${esc(w.text)}</div>
         <div class="label" style="margin-top:6px">Jaučiasi ${w.feels}° · vėjas ${w.wind} km/h</div>
-        <div class="label" style="margin-top:2px">Dieną ${w.min}°…${w.max}° · lietus ${w.rain ?? 0}%</div></div>
-    </div>`;
+        <div class="label" style="margin-top:2px">Dieną ${w.min}°…${w.max}° · lietus ${w.rain ?? 0}%</div>
+        <div class="label wb-more">Visa diena →</div></div>
+    </button>`;
   }
 
   html += `<div class="card vibe-card stack">
@@ -631,12 +643,7 @@ function viewSpinta() {
       <p>Spausk + ir nufotografuok rūbą arba pasirink kelias nuotraukas iš galerijos. Fonas iškerpamas automatiškai.</p>
       <button class="btn primary" data-act="add">Pridėti rūbų</button></div>`;
   } else {
-    if (S.queue.length || S.preparing) html += uploadBannerHTML();
     html += `<div class="grid">`;
-    for (const q of S.queue.slice(0, 3)) {
-      html += `<div class="tile" data-q="${q.id}"><div class="ph-wrap">${q.preview ? `<img class="ph" src="${q.preview}" alt="">` : ''}</div><div class="cap">Įkeliama</div>
-        <div class="proc"><span class="lbl">${esc(q.label)}</span><div class="bar"><i style="width:${Math.round(q.p * 100)}%"></i></div></div></div>`;
-    }
     for (const it of items) html += S.selecting ? tileHTML(it, '', 'sel-item', S.sel.has(it.id)) : tileHTML(it);
     html += `</div>`;
   }
@@ -652,19 +659,36 @@ function viewSpinta() {
   return html + `</div><button class="fab" data-act="add" aria-label="Pridėti rūbą">+</button>`;
 }
 
-function favCard(o) {
-  return `<button class="fav" data-act="open-outfit" data-id="${o.id}">${flatlayHTML(o.itemIds, true)}
-    <div class="ft">${esc(o.title || 'Fitas')}</div><div class="label fd">Nº ${lookNo(o)} · ${fmtTs(o.createdAt)}</div></button>`;
+function favCard(o, act = 'open-outfit', selected = false) {
+  return `<button class="fav ${selected ? 'sel' : ''}" data-act="${act}" data-id="${o.id}" ${act === 'fav-sel' ? `aria-pressed="${selected}"` : ''}>
+    <div class="fav-ph">${flatlayHTML(o.itemIds, true)}</div>
+    <div class="fav-meta"><span class="label">Nº ${lookNo(o)}</span><span class="label">${fmtTs(o.createdAt)}</span></div>
+    <div class="ft">${esc(o.title || 'Fitas')}</div></button>`;
 }
 
+const favList = () => S.outfits.filter((o) => o.favorite).sort((a, b) => b.createdAt - a.createdAt);
+
 function viewMegstami() {
-  const favs = S.outfits.filter((o) => o.favorite).sort((a, b) => b.createdAt - a.createdAt);
+  const favs = favList();
   const recent = S.outfits.filter((o) => !o.favorite).sort((a, b) => b.createdAt - a.createdAt).slice(0, 20);
-  let html = `<div class="stack"><div class="hello"><div class="h-title"><em>Mėgstami</em><br>fitai</div><div class="label h-sub">${favs.length} išsaugoti</div></div>`;
+  let html = `<div class="stack">
+    <div class="hello row" style="justify-content:space-between;align-items:flex-end">
+      <div><div class="h-title"><em>Mėgstami</em><br>fitai</div><div class="label h-sub">${favs.length} ${plural(favs.length, 'išsaugotas', 'išsaugoti', 'išsaugotų')}</div></div>
+      ${favs.length ? `<button class="btn sm ${S.selecting ? 'dark' : ''}" data-act="select-mode">${S.selecting ? 'Baigti' : 'Žymėti'}</button>` : ''}
+    </div>`;
   html += favs.length
-    ? `<div class="fav-grid">${favs.map(favCard).join('')}</div>`
+    ? `<div class="fav-grid">${favs.map((o) => (S.selecting ? favCard(o, 'fav-sel', S.sel.has(o.id)) : favCard(o))).join('')}</div>`
     : `<div class="card empty"><div class="big">Dar nieko</div><h3>Nėra mėgstamų</h3><p>Kai fitas patiks, spausk „Į mėgstamus“ ir jis atsiras čia.</p></div>`;
-  if (recent.length) html += `<div class="section-head"><h3>Neseniai sukurti</h3><span class="label">${recent.length}</span></div><div class="fav-grid">${recent.map(favCard).join('')}</div>`;
+  if (recent.length && !S.selecting) html += `<div class="section-head"><h3>Neseniai sukurti</h3><span class="label">${recent.length}</span></div><div class="fav-grid">${recent.map((o) => favCard(o)).join('')}</div>`;
+  if (S.selecting) {
+    const n = S.sel.size;
+    const all = favs.length && favs.every((o) => S.sel.has(o.id));
+    return html + `<div style="height:64px" aria-hidden="true"></div></div><div class="bulkbar">
+      <span class="label bb-count">${n ? `Pažymėta: ${n}` : 'Paliesk fitus'}</span>
+      <button class="btn sm" data-act="fav-sel-all">${all ? 'Nužymėti' : 'Visus'}</button>
+      <button class="btn sm danger" data-act="fav-unfav" ${n ? '' : 'disabled'}>Pašalinti</button>
+    </div>`;
+  }
   return html + `</div>`;
 }
 
@@ -863,7 +887,7 @@ window.addEventListener('hashchange', () => {
   S.tab = location.hash.slice(1) || 'fitas';
   S.selecting = false;
   S.sel.clear();
-  closeSheet();
+  if (!S.inReview) closeSheet(); // peržiūra lieka atidaryta (pvz. kai įkėlimas perjungia į Spintą)
   render().then(() => window.scrollTo(0, 0));
 });
 
@@ -873,7 +897,7 @@ let fileTarget = 'items';
 fileInput.addEventListener('change', async () => {
   const files = [...fileInput.files];
   fileInput.value = '';
-  if (!files.length) return;
+  if (!files.length) { if (S.uploadWaiting) hideUpload(); return; }
   if (fileTarget === 'self') {
     S.selfPhoto = await resize(files[0], 1400, 'image/jpeg', 0.88);
     await setSetting('selfPhoto', S.selfPhoto);
@@ -918,36 +942,56 @@ fileInput.addEventListener('change', async () => {
     busyOff();
     return;
   }
+  addItemFiles(files);
+});
+
+// Kamera: viena nuotrauka iš karto
+const camInput = $('#camInput');
+camInput.addEventListener('change', () => {
+  const files = [...camInput.files];
+  camInput.value = '';
+  if (files.length) addItemFiles(files);
+  else if (S.uploadWaiting) hideUpload();
+});
+// Safari praneša, kai nuotraukų pasirinkimas atšaukiamas – tada slepiam laukimo langą
+for (const inp of [fileInput, camInput]) inp.addEventListener('cancel', () => { if (S.uploadWaiting) hideUpload(); });
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const newBatch = () => ({ total: 0, done: 0, start: 0, ids: [], failed: 0, t0: Date.now(), tagWarned: false });
+
+async function addItemFiles(files) {
   const single = files.length === 1;
-  if (!S.queueRunning && !S.preparing) { S.batch = { total: 0, done: 0, ids: [] }; setSetting('batchIds', []).catch(() => {}); }
+  if (!S.queueRunning && !S.preparing) { S.batch = newBatch(); setSetting('batchIds', []).catch(() => {}); }
   S.batch.total += files.length;
   if (S.tab !== 'spinta') location.hash = '#spinta';
   // Nuotraukas iškart sumažinam ir išsaugom telefone: mažiau atminties, o jei programėlė persikraus – įkėlimas tęsis
   S.preparing = (S.preparing || 0) + files.length;
   S.prepDone = S.prepDone || 0;
-  rerender();
+  showUpload();
   const cat = defaultCategory();
   let k = 0;
   for (const f of files) {
+    if (S.stopUpload) { S.batch.total--; continue; }
     try {
       // 1) sumažinta kopija į telefono atmintį – kad niekas nedingtų, o atmintyje nelaikytume didelių nuotraukų
       const original = await resize(f, 1400, 'image/jpeg', 0.85);
       const row = { id: uid(), original, cat, single, createdAt: Date.now() + k++ };
       await db.put('pending', row);
-      S.queue.push({ id: row.id, label: 'Laukia', p: 0, preview: '', single, cat });
+      S.queue.push({ id: row.id, label: 'Laukia', p: 0, single, cat });
     } catch (e) {
       console.warn('prep', e);
       S.batch.total--;
+      S.batch.failed++;
     }
     S.prepDone++;
-    updateBanner();
+    renderUpload();
     if (!S.queueRunning) runQueue();
   }
   S.preparing -= files.length;
   if (!S.preparing) S.prepDone = 0;
-  updateBanner();
+  renderUpload();
   if (!S.queueRunning) runQueue(); // užbaigti partiją (peržiūra), jei eilė jau tuščia
-});
+}
 
 function defaultCategory() {
   if (S.fCat) return S.fCat;
@@ -963,125 +1007,286 @@ function stageOf(label = '') {
   if (/šviesa/i.test(label)) return 1;
   return 0;
 }
-function uploadBannerHTML() {
-  const q = S.queue[0];
-  const b = S.batch || { total: S.queue.length, done: 0 };
-  const st = stageOf(q?.label);
-  const steps = ['Karpomas fonas', 'Taisoma šviesa', S.keyOk ? 'DI atpažįsta' : 'Saugoma'];
-  const prep = S.preparing ? ` · ruošiama ${S.prepDone}/${S.preparing}` : '';
-  return `<div class="up-banner" id="upBanner">
-    <div class="row" style="justify-content:space-between"><span class="label">Įkeliama ${Math.min(b.done + 1, b.total)} iš ${b.total}${prep}</span><span class="label">${Math.round(((b.done + (q?.p || 0)) / Math.max(1, b.total)) * 100)}%</span></div>
-    <ol class="up-steps">${steps.map((t, i) => `<li class="${i < st ? 'done' : i === st ? 'on' : ''}">${t}</li>`).join('')}</ol>
-    <div class="bar"><i style="width:${((b.done + (q?.p || 0)) / Math.max(1, b.total)) * 100}%"></i></div>
-    <span class="small muted">Gali naršyti toliau – baigus parodysiu visus naujus rūbus peržiūrai.</span></div>`;
-}
-function updateBanner() {
-  const ban = document.getElementById('upBanner');
-  if (ban) ban.outerHTML = uploadBannerHTML();
-  else if (S.tab === 'spinta' && (S.queue.length || S.preparing)) rerender();
-}
-function updateQueueTile(q) {
-  const ban = document.getElementById('upBanner');
-  if (ban) ban.outerHTML = uploadBannerHTML();
-  const el = document.querySelector(`[data-q="${q.id}"]`);
-  if (!el) return;
-  el.querySelector('.lbl').textContent = q.label;
-  el.querySelector('.bar i').style.width = `${Math.round(q.p * 100)}%`;
+
+// ---- Pridėjimo langas: savas meniu prieš atidarant telefono nuotraukas ----
+const ICON_LIB = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="14" rx="1.5"/><circle cx="9" cy="10" r="1.6"/><path d="m4 17 5-4.5 3.5 3 3-2.5L20 17"/></svg>';
+const ICON_CAM = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8.5h3.2L9 6h6l1.8 2.5H20v10H4z"/><circle cx="12" cy="13.2" r="3.4"/></svg>';
+function openAddSheet() {
+  openSheet(`${sheetTop('Pridėti rūbų')}
+    <div class="stack">
+      <div class="add-opts">
+        <button class="add-opt" data-act="add-lib">${ICON_LIB}<span class="ao-t"><b>Iš nuotraukų</b><span>Pažymėk vieną ar daug rūbų iš karto</span></span><span class="label">→</span></button>
+        <button class="add-opt" data-act="add-cam">${ICON_CAM}<span class="ao-t"><b>Fotografuoti</b><span>Vienas rūbas, nuotrauka dabar</span></span><span class="label">→</span></button>
+      </div>
+      <div class="add-how">
+        <span class="label">Kaip tai vyksta</span>
+        <ol>
+          <li>Pažymėk nuotraukas ir spausk <b>„Pridėti“</b> (viršuje dešinėje).</li>
+          <li>Fitai įkels jas po vieną: iškirps foną, pataisys šviesą${S.keyOk ? ', DI atpažins rūbą' : ''}.</li>
+          <li>Pabaigoje peržiūrėsi visus naujus rūbus ir patvirtinsi.</li>
+        </ol>
+      </div>
+      <div class="add-how">
+        <span class="label">Kad fonas gražiai išsikirptų</span>
+        <ul>
+          <li>Rūbas ant lygaus, vienspalvio paviršiaus.</li>
+          <li>Visas rūbas kadre, šalia nieko daugiau.</li>
+          <li>Dienos šviesa, be stiprių šešėlių.</li>
+        </ul>
+      </div>
+    </div>`);
 }
 
-let bgFailedOnce = false;
+// ---- Įkėlimo langas: uždengia programėlę, kol viskas įkelta ----
+let upEl = null, wakeLock = null;
+function showUpload(waiting = false) {
+  if (!upEl) {
+    upEl = document.createElement('div');
+    upEl.className = 'upl';
+    upEl.setAttribute('role', 'dialog');
+    upEl.setAttribute('aria-modal', 'true');
+    upEl.setAttribute('aria-label', 'Keliami rūbai');
+    document.body.appendChild(upEl);
+  }
+  S.uploadWaiting = waiting;
+  upEl.dataset.key = '';
+  upEl.hidden = false;
+  document.body.style.overflow = 'hidden';
+  renderUpload();
+  if (!waiting) keepAwake(true);
+}
+function hideUpload() {
+  S.uploadWaiting = false;
+  if (upEl) upEl.hidden = true;
+  if ($('#sheet').hidden) document.body.style.overflow = '';
+  keepAwake(false);
+}
+// Kad ekranas neužgestų ir telefonas neužmigdytų programėlės įkėlimo metu
+async function keepAwake(on) {
+  try {
+    if (on && !wakeLock && 'wakeLock' in navigator && document.visibilityState === 'visible') {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => { wakeLock = null; });
+      renderUpload();
+    } else if (!on && wakeLock) {
+      const w = wakeLock;
+      wakeLock = null;
+      await w.release();
+    }
+  } catch (e) {
+    console.warn('wakeLock', e);
+  }
+}
+document.addEventListener('visibilitychange', () => {
+  // grįžus į programėlę – vėl prašom neužgesinti ekrano
+  if (document.visibilityState === 'visible' && upEl && !upEl.hidden && !S.uploadWaiting) keepAwake(true);
+});
+
+function renderUpload() {
+  if (!upEl || upEl.hidden) return;
+  if (S.uploadWaiting) {
+    if (upEl.dataset.key === 'wait') return;
+    upEl.dataset.key = 'wait';
+    upEl.innerHTML = `<div class="upl-card">
+      <span class="label">Pridėti rūbų</span>
+      <div class="upl-title">Laukiu<br><em>nuotraukų</em></div>
+      <div class="upl-bar indet"><i></i></div>
+      <p class="small muted" style="margin:0">Pažymėk nuotraukas ir spausk „Pridėti“. Kai jų daug, telefonas jas ruošia kelias sekundes, o tada įkėlimas prasidės čia.</p>
+      <button class="btn sm ghost" data-act="up-cancel">Atšaukti</button></div>`;
+    return;
+  }
+  const b = S.batch || newBatch();
+  const q = S.queue[0];
+  const total = Math.max(1, b.total);
+  const frac = Math.min(1, (b.done + (q?.p || 0)) / total);
+  const st = stageOf(q?.label);
+  const steps = ['Karpomas fonas', 'Taisoma šviesa', S.keyOk ? 'DI atpažįsta' : 'Saugoma'];
+  const lastId = b.ids[b.ids.length - 1] || '';
+  const fresh = b.done - b.start;
+  const left = b.total - b.done;
+  const eta = fresh >= 1 && left > 0 ? Math.max(1, Math.round((((Date.now() - b.t0) / fresh) * left) / 60000)) : null;
+  const status = S.stopUpload ? 'Stabdoma po šios nuotraukos'
+    : q ? `${Math.min(b.done + 1, b.total)}-as rūbas · ${q.label.toLowerCase()}`
+    : S.preparing ? `Ruošiamos nuotraukos · ${S.prepDone} iš ${S.preparing}` : 'Baigiama';
+  const key = `run:${lastId}:${S.stopUpload ? 1 : 0}:${wakeLock ? 1 : 0}`;
+  if (upEl.dataset.key !== key) {
+    upEl.dataset.key = key;
+    const last = itemById(lastId);
+    upEl.innerHTML = `<div class="upl-card" aria-live="polite">
+      <div class="row" style="justify-content:space-between"><span class="label">Keliami rūbai</span><span class="label" data-f="pct"></span></div>
+      <div class="upl-count"><b data-f="done"></b><span data-f="of"></span></div>
+      <div class="upl-bar"><i data-f="bar"></i></div>
+      <ol class="up-steps" data-f="steps">${steps.map((t) => `<li>${t}</li>`).join('')}</ol>
+      <div class="upl-now">
+        <div class="upl-ph">${last?.image ? `<img src="${blobURL(last.image)}" alt="Paskutinis įkeltas rūbas">` : ''}</div>
+        <div class="upl-st"><span class="label">${last ? 'Ką tik įkelta' : 'Pradedama'}</span><span class="serif" data-f="status"></span><span class="label" data-f="eta"></span></div>
+      </div>
+      <div class="upl-warn"><b>Neišeik iš programėlės</b><span>ir neužrakink telefono, kol bus įkelta viskas.${wakeLock ? ' Ekranas pats neužges.' : ''} Jei išeisi, įkėlimas sustos ir tęsis, kai grįši.</span></div>
+      <button class="btn sm ghost" data-act="up-stop" ${S.stopUpload ? 'disabled' : ''}>Sustabdyti įkėlimą</button></div>`;
+  }
+  // dažnai keičiasi tik skaičiai – nekeičiam viso lango, kad nemirgėtų
+  const f = (n) => upEl.querySelector(`[data-f="${n}"]`);
+  f('pct').textContent = `${Math.round(frac * 100)}%`;
+  f('done').textContent = b.done;
+  f('of').textContent = `iš ${b.total} įkelta`;
+  f('bar').style.width = `${frac * 100}%`;
+  f('status').textContent = status;
+  f('eta').textContent = eta ? `Liko apie ${eta} min.` : '';
+  [...f('steps').children].forEach((li, i) => { li.className = !q ? '' : i < st ? 'done' : i === st ? 'on' : ''; });
+}
+
+// Vieno rūbo apdorojimas: fonas → šviesa → DI. Grąžina išsaugotą rūbą.
+async function processItem(q, useKey) {
+  q.label = 'Ruošiama'; q.p = 0.05; renderUpload();
+  // 2) nuotrauką pasiimam iš telefono atminties tik dabar, po vieną
+  const row = await db.get('pending', q.id);
+  if (!row) throw new Error('nuotrauka nerasta');
+  if (row.cat) q.cat = row.cat;
+  const original = row.original || (await resize(row.raw, 1400, 'image/jpeg', 0.85));
+  let image = original, cutout = false;
+  q.cutBad = false;
+  if (await getSetting('bgRemoval', true)) {
+    try {
+      q.label = 'Karpomas fonas'; renderUpload();
+      const cut = await removeBackground(original, (lab, p) => { q.label = lab; q.p = 0.1 + p * 0.6; renderUpload(); });
+      if (lastCutBad) { q.cutBad = true; } else { image = await resize(cut, 900, 'image/png'); cutout = true; }
+    } catch (e) {
+      console.warn('bg', e);
+      q.cutBad = true;
+    }
+  }
+  if (await getSetting('autoEnhance', true)) {
+    q.label = 'Taisoma šviesa'; q.p = 0.72; renderUpload();
+    try { image = await autoEnhance(image); } catch (e) { console.warn('enhance', e); }
+  }
+  const item = {
+    id: q.id, image, original, cutout, createdAt: Date.now(),
+    category: q.cat || defaultCategory(), name: '', colors: [], seasons: [], occasions: [], warmth: 3, description: '', cutBad: !!q.cutBad,
+  };
+  if (useKey) {
+    q.label = 'DI atpažįsta'; q.p = 0.8; renderUpload();
+    try {
+      const t = await tagItem(image, S.categories);
+      Object.assign(item, {
+        category: t.category || item.category,
+        name: t.name || '',
+        colors: Array.isArray(t.colors) ? t.colors.slice(0, 4) : [],
+        seasons: t.seasons,
+        occasions: t.occasions,
+        warmth: Math.min(5, Math.max(1, parseInt(t.warmth) || 3)),
+        description: t.description || '',
+      });
+    } catch (e) {
+      console.warn('tag', e);
+      if (S.batch && !S.batch.tagWarned) { S.batch.tagWarned = true; toast('DI atpažinti nepavyko: ' + e.message, 5000); }
+    }
+  }
+  q.label = 'Saugoma'; q.p = 0.95; renderUpload();
+  await db.put('items', item);
+  return item;
+}
+
+// Jei apdoroti nepavyko net du kartus – išsaugom bent originalią nuotrauką, kad niekas nedingtų
+async function saveFallback(q) {
+  try {
+    const row = await db.get('pending', q.id);
+    if (!row?.original) return null;
+    const item = {
+      id: q.id, image: row.original, original: row.original, cutout: false, cutBad: true, createdAt: Date.now(),
+      category: q.cat || defaultCategory(), name: '', colors: [], seasons: [], occasions: [], warmth: 3, description: '',
+    };
+    await db.put('items', item);
+    return item;
+  } catch (e) {
+    console.error('fallback', e);
+    return null;
+  }
+}
+
 async function runQueue() {
   if (S.queueRunning) return;
   S.queueRunning = true;
-  let done = 0, lastId = null, wasSingle = false;
   const useKey = S.keyOk;
   while (S.queue.length) {
+    if (S.stopUpload) {
+      // likusios nuotraukos nebus įkeltos – išvalom jas iš telefono atminties
+      for (const q of S.queue) { try { await db.del('pending', q.id); } catch (_) {} }
+      if (S.batch) S.batch.total = S.batch.done;
+      S.queue = [];
+      break;
+    }
     const q = S.queue[0];
-    try {
-      q.label = 'Ruošiama'; q.p = 0.05; updateQueueTile(q);
-      // 2) nuotrauką pasiimam iš telefono atminties tik dabar, po vieną
-      const row = await db.get('pending', q.id);
-      if (!row) throw new Error('nuotrauka nerasta');
-      if (row.cat) q.cat = row.cat;
-      const original = row.original || (await resize(row.raw, 1400, 'image/jpeg', 0.85));
-      let image = original, cutout = false;
-      if (await getSetting('bgRemoval', true)) {
-        try {
-          q.label = 'Karpomas fonas'; updateQueueTile(q);
-          const cut = await removeBackground(original, (lab, p) => { q.label = lab; q.p = 0.1 + p * 0.6; updateQueueTile(q); });
-          if (lastCutBad) { q.cutBad = true; } else { image = await resize(cut, 900, 'image/png'); cutout = true; }
-        } catch (e) {
-          console.warn('bg', e);
-          if (!bgFailedOnce) toast('Fono iškirpti nepavyko – paliekama originali nuotrauka');
-          bgFailedOnce = true;
-        }
+    let item = null;
+    for (let attempt = 1; attempt <= 2 && !item; attempt++) {
+      try {
+        item = await processItem(q, useKey);
+      } catch (e) {
+        console.error('upload', attempt, e);
+        if (attempt === 1) { q.label = 'Bandoma dar kartą'; renderUpload(); releaseCutter(); await sleep(1000); }
       }
-      if (await getSetting('autoEnhance', true)) {
-        q.label = 'Taisoma šviesa'; q.p = 0.72; updateQueueTile(q);
-        try { image = await autoEnhance(image); } catch (e) { console.warn('enhance', e); }
-      }
-      const item = {
-        id: q.id, image, original, cutout, createdAt: Date.now(),
-        category: q.cat || defaultCategory(), name: '', colors: [], seasons: [], occasions: [], warmth: 3, description: '', cutBad: !!q.cutBad,
-      };
-      if (useKey) {
-        q.label = 'DI atpažįsta'; q.p = 0.8; updateQueueTile(q);
-        try {
-          const t = await tagItem(image, S.categories);
-          Object.assign(item, {
-            category: t.category || item.category,
-            name: t.name || '',
-            colors: Array.isArray(t.colors) ? t.colors.slice(0, 4) : [],
-            seasons: t.seasons,
-            occasions: t.occasions,
-            warmth: Math.min(5, Math.max(1, parseInt(t.warmth) || 3)),
-            description: t.description || '',
-          });
-        } catch (e) {
-          console.warn('tag', e);
-          toast('DI atpažinti nepavyko: ' + e.message);
-        }
-      }
-      await db.put('items', item);
+    }
+    if (!item) item = await saveFallback(q);
+    if (item) {
       S.items.push(item);
-      done++; lastId = item.id; wasSingle = q.single;
       // partijos sąrašas saugomas telefone – kad persikrovus peržiūroje būtų visi rūbai
       if (S.batch) { S.batch.done++; S.batch.ids.push(item.id); setSetting('batchIds', S.batch.ids).catch(() => {}); }
-    } catch (e) {
-      console.error(e);
-      toast('Nepavyko įkelti nuotraukos: ' + e.message);
+    } else if (S.batch) {
+      S.batch.failed++;
+      S.batch.total--;
     }
     try { await db.del('pending', q.id); } catch (_) {}
     S.queue.shift();
-    if (S.tab === 'spinta') await rerender();
+    renderUpload();
+    await sleep(150); // trumpas atokvėpis – telefonas spėja atlaisvinti atmintį prieš kitą nuotrauką
   }
   S.queueRunning = false;
-  if (S.preparing) return;
-  releaseCutter(); // atlaisvinam fono karpymo modelio atmintį // dar ruošiamos kitos nuotraukos – baigsim, kai visos bus apdorotos
-  const ids = S.batch?.ids || [];
+  if (S.preparing) return; // dar ruošiamos kitos nuotraukos – baigsim, kai visos bus apdorotos
+  releaseCutter(); // atlaisvinam fono karpymo modelio atmintį
+  S.stopUpload = false;
+  const b = S.batch;
+  const ids = b?.ids || [];
   S.batch = null;
-  setSetting('batchIds', []).catch(() => {});
+  hideUpload();
+  await rerender();
   const mk = [[50, '50 rūbų spintoje. Tikra kolekcija.'], [25, '25 rūbai – deriniai darosi įdomesni.'], [10, 'Dešimt rūbų. Stilistė jau turi iš ko rinktis.'], [1, 'Pirmas rūbas spintoje. Gera pradžia.']].find(([k]) => S.items.length >= k);
-  if (mk && done) milestone('items' + mk[0], mk[1]);
-  if (done === 1 && wasSingle) openItem(lastId, true);
-  else if (ids.length > 1) openReview(ids);
-  else if (done) rerender();
+  if (mk && ids.length) milestone('items' + mk[0], mk[1]);
+  if (b?.failed) toast(`${b.failed} ${plural(b.failed, 'nuotraukos', 'nuotraukų', 'nuotraukų')} įkelti nepavyko`, 6000);
+  if (ids.length > 1) openReview(ids);
+  else {
+    setSetting('batchIds', []).catch(() => {});
+    if (ids.length === 1) openItem(ids[0], true);
+  }
 }
 
-// ---- Naujų rūbų peržiūra: viskas viename lange, be atskirų „Išsaugoti“ ----
-function openReview(ids) {
+// ---- Naujų rūbų peržiūra: visi nauji rūbai viename sąraše, patvirtinama „Viskas gerai“ ----
+function openReview(ids, back = false) {
   const its = ids.map(itemById).filter(Boolean);
-  if (!its.length) return;
-  openSheet(`${sheetTop(`Nauji rūbai · ${its.length}`)}
+  if (!its.length) return finishReview();
+  const scroll = back ? S.review?.scroll || 0 : 0;
+  const bad = its.filter((it) => it.cutBad && !it.cutout).length;
+  openSheet(`<div class="sheet-top"><h2>Nauji rūbai · ${its.length}</h2><span class="label">Patikrink</span></div>
     <div class="stack">
-      <p class="small muted" style="margin:0">${S.keyOk ? 'DI jau užpildė pavadinimus ir kategorijas.' : 'Rūbai jau spintoje.'} Pataisyk tik tai, kas neteisinga – pakeitimai saugomi iškart.</p>
-      <div class="rv-list">${its.map((it) => `<div class="rv-row" data-id="${it.id}">
-        <div class="rv-ph" data-act="item" data-id="${it.id}"><img src="${blobURL(it.image)}" alt="" loading="lazy" decoding="async"></div>
+      <p class="small muted" style="margin:0">Paliesk nuotrauką, kad pažiūrėtum ar pataisytum rūbą. ${S.keyOk ? 'Pavadinimus ir kategorijas užpildė DI.' : 'Pavadinimą ir kategoriją gali pakeisti čia pat.'} Pakeitimai saugomi iškart.</p>
+      ${bad ? `<div class="gap-note warn"><span class="label">${bad} ${plural(bad, 'rūbo', 'rūbų', 'rūbų')} fonas neiškirptas</span>Juos pažymėjome. Atidaryk ir nutrink foną trintuku arba palik taip.</div>` : ''}
+      <div class="rv-list">${its.map((it, i) => `<div class="rv-row" data-id="${it.id}">
+        <span class="rv-n label">${pad2(i + 1)}</span>
+        <button class="rv-ph" data-act="item" data-id="${it.id}" aria-label="Atidaryti rūbą">${it.image ? `<img src="${blobURL(it.image)}" alt="" loading="lazy" decoding="async">` : ''}</button>
         <div class="rv-f"><input class="input rv-name" value="${esc(it.name)}" placeholder="Pavadinimas">
-          <select class="input rv-cat">${categorySelect(it.category)}</select></div>
-        <button class="rv-del" data-act="rv-del" data-id="${it.id}" aria-label="Ištrinti">×</button></div>`).join('')}</div>
-      <button class="btn primary block" data-act="close">Išsaugoti visus</button>
+          <select class="input rv-cat">${categorySelect(it.category)}</select>
+          ${it.cutBad && !it.cutout ? '<span class="label rv-warn">Fonas neiškirptas</span>' : ''}</div>
+        <button class="rv-del" data-act="rv-del" data-id="${it.id}" aria-label="Ištrinti rūbą">×</button></div>`).join('')}</div>
+      <div class="rv-done"><button class="btn primary block" data-act="rv-done">Viskas gerai · ${its.length} ${plural(its.length, 'rūbas', 'rūbai', 'rūbų')}</button></div>
     </div>`);
+  S.review = { ids: its.map((i) => i.id), scroll };
+  S.inReview = true;
+  $('#sheet').scrollTop = scroll;
+}
+function finishReview() {
+  const n = S.review?.ids.length || 0;
+  setSetting('batchIds', []).catch(() => {});
+  closeSheet();
+  if (n) toast(`${n} ${plural(n, 'naujas rūbas', 'nauji rūbai', 'naujų rūbų')} spintoje`);
+  rerender();
 }
 
 document.addEventListener('change', async (e) => {
@@ -1110,8 +1315,11 @@ function openItem(id, fresh = false) {
   const it = itemById(id);
   if (!it) return;
   const ws = wearStats()[id];
+  // atidaryta iš naujų rūbų peržiūros – įsimenam, kur sąraše buvom, ir „Uždaryti“ grąžins atgal
+  if (S.inReview) S.review.scroll = $('#sheet').scrollTop;
+  const fromReview = !!S.review?.ids.includes(id);
   openSheet(`
-    ${sheetTop(fresh ? 'Naujas rūbas' : 'Rūbas')}
+    ${sheetTop(fresh ? 'Naujas rūbas' : 'Rūbas', fromReview ? '← Į sąrašą' : 'Uždaryti')}
     <div class="stack" id="itemForm" data-id="${id}">
       ${it.image ? `<div class="item-hero"><img id="itemImg" src="${blobURL(it.image)}" alt=""></div>`
         : `<div class="item-hero stack" style="gap:10px"><span class="serif" style="font-size:20px">Nuotrauka dingo</span>
@@ -1152,6 +1360,7 @@ function openItem(id, fresh = false) {
         <button class="btn sm danger" style="flex:1" data-act="del-item">Ištrinti</button>
       </div>
     </div>`);
+  S.sheetFromReview = fromReview;
 }
 
 // ================= Konstruktorius =================
@@ -1364,11 +1573,32 @@ async function doStyle(vibe, exclude = [], must = []) {
 }
 
 const actions = {
-  close: closeSheet,
+  close: sheetBack,
   add() {
+    openAddSheet();
+  },
+  'add-lib'() {
+    closeSheet();
     fileTarget = 'items';
     fileInput.multiple = true;
+    showUpload(true); // grįžus iš nuotraukų iškart matomas įkėlimo langas
     fileInput.click();
+  },
+  'add-cam'() {
+    closeSheet();
+    showUpload(true);
+    camInput.click();
+  },
+  'up-cancel'() {
+    hideUpload();
+  },
+  'up-stop'() {
+    if (!confirm('Sustabdyti įkėlimą? Jau įkelti rūbai liks spintoje, o likusios nuotraukos nebus įkeltos.')) return;
+    S.stopUpload = true;
+    renderUpload();
+  },
+  'rv-done'() {
+    finishReview();
   },
   'vibe-idea'(el) {
     $('#vibe').value = el.dataset.v;
@@ -1488,7 +1718,7 @@ const actions = {
     const pr = parseFloat((f.querySelector('[name=price]').value || '').replace(',', '.'));
     it.price = pr > 0 ? Math.round(pr * 100) / 100 : null;
     await db.put('items', it);
-    closeSheet();
+    sheetBack();
     toast('Išsaugota');
     rerender();
   },
@@ -1545,7 +1775,8 @@ const actions = {
     if (!confirm('Ištrinti šį rūbą iš spintos?')) return;
     await db.del('items', id);
     S.items = S.items.filter((i) => i.id !== id);
-    closeSheet();
+    if (S.review) S.review.ids = S.review.ids.filter((x) => x !== id);
+    sheetBack();
     toast('Ištrinta');
     rerender();
   },
@@ -1797,11 +2028,21 @@ const actions = {
     location.hash = '#fitas';
     setTimeout(() => doStyle(`Derinys su šiuo rūbu: ${itemNames([id])[0]}`, [], [id]), 50);
   },
+  weather() {
+    openWeather();
+  },
   async 'rv-del'(el) {
     const id = el.dataset.id;
     await db.del('items', id);
     S.items = S.items.filter((i) => i.id !== id);
     el.closest('.rv-row').remove();
+    if (S.review) {
+      S.review.ids = S.review.ids.filter((x) => x !== id);
+      setSetting('batchIds', S.review.ids).catch(() => {});
+      if (!S.review.ids.length) return finishReview();
+      const b = $('[data-act="rv-done"]');
+      if (b) b.textContent = `Viskas gerai · ${S.review.ids.length} ${plural(S.review.ids.length, 'rūbas', 'rūbai', 'rūbų')}`;
+    }
     toast('Ištrinta');
     if (S.tab === 'spinta') { const y = window.scrollY; view.innerHTML = await viewSpinta(); window.scrollTo(0, y); }
   },
@@ -1958,6 +2199,30 @@ const actions = {
     else S.sel.add(id);
     rerender();
   },
+  'fav-sel'(el) {
+    const id = el.dataset.id;
+    if (S.sel.has(id)) S.sel.delete(id);
+    else S.sel.add(id);
+    rerender();
+  },
+  'fav-sel-all'() {
+    const ids = favList().map((o) => o.id);
+    const all = ids.every((id) => S.sel.has(id));
+    ids.forEach((id) => (all ? S.sel.delete(id) : S.sel.add(id)));
+    rerender();
+  },
+  async 'fav-unfav'() {
+    const n = S.sel.size;
+    if (!n || !confirm(`Pašalinti ${n} ${plural(n, 'fitą', 'fitus', 'fitų')} iš mėgstamų? Patys fitai nebus ištrinti.`)) return;
+    for (const id of S.sel) {
+      const o = outfitById(id);
+      if (o) { o.favorite = false; await saveOutfit(o); }
+    }
+    S.sel.clear();
+    S.selecting = false;
+    toast(`Pašalinta iš mėgstamų: ${n}`);
+    rerender();
+  },
   'sel-all'() {
     const visible = [...document.querySelectorAll('.grid .tile[data-id]')].map((t) => t.dataset.id);
     const all = visible.every((id) => S.sel.has(id));
@@ -2037,7 +2302,7 @@ document.addEventListener('change', async (e) => {
     toast(e.target.checked ? 'Fonas bus iškerpamas' : 'Fonas nebus iškerpamas');
   }
 });
-$('#weatherPill').addEventListener('click', () => (location.hash = '#fitas'));
+$('#weatherPill').addEventListener('click', () => openWeather());
 
 // ================= Paleidimas =================
 async function loadAll() {
@@ -2067,6 +2332,50 @@ async function loadAll() {
   S.events = (await getSetting('styleEvents')) || [];
   S.me = (await getSetting('me')) || {};
   S.hintDl = !!(await getSetting('hintDl'));
+}
+
+// ---- Orų langas: visa diena ----
+async function openWeather() {
+  openSheet(`${sheetTop('Orai')}<div id="wxBody">${loadingHTML('Žiūrim į dangų…')}</div>`);
+  let d;
+  try {
+    d = await getWeatherDay();
+  } catch (e) {
+    console.warn('weather', e);
+    const b = $('#wxBody');
+    if (b) b.innerHTML = `<div class="card empty"><h3>Orų gauti nepavyko</h3><p>Patikrink internetą ir bandyk dar kartą.</p><button class="btn" data-act="weather">Bandyti dar kartą</button></div>`;
+    return;
+  }
+  const b = $('#wxBody');
+  if (!b) return; // langas jau uždarytas
+  const t = d.today, m = d.tomorrow;
+  const fact = (label, value, sub = '') => `<div class="wx-fact"><span class="label">${label}</span><b>${value}</b>${sub ? `<span class="small muted">${sub}</span>` : ''}</div>`;
+  b.innerHTML = `<div class="stack">
+    <div class="wx-now panel-wine">
+      <div><div class="label">${esc(d.place)} · dabar</div><div class="t">${d.now.temp}°</div></div>
+      <div style="text-align:right"><div class="wx-emoji" aria-hidden="true">${d.now.emoji}</div><div class="serif" style="font-size:20px">${esc(d.now.text)}</div><div class="label">Jaučiasi ${d.now.feels}°</div></div>
+    </div>
+    <div class="section-head"><h3>Kas valandą</h3><span class="label">24 val.</span></div>
+    <div class="wx-hours" role="list">${d.hours.map((h, i) => `<div class="wx-h ${h.newDay && i ? 'nd' : ''}" role="listitem">
+      <span class="label">${i === 0 ? 'Dabar' : h.newDay ? 'Rytoj' : h.h}</span>
+      <span class="wx-e" aria-hidden="true">${h.emoji}</span>
+      <b>${h.temp}°</b>
+      <i class="wx-tb" style="--h:${h.rain}%"></i>
+      <span class="label wx-r ${h.rain >= 40 ? 'hi' : ''}">${h.rain ? h.rain + '%' : '–'}</span></div>`).join('')}</div>
+    <div class="label" style="margin-top:-6px">Stulpelis – lietaus tikimybė tą valandą</div>
+    <div class="section-head"><h3>Šiandien</h3><span class="label">${esc(t.text)}</span></div>
+    <div class="wx-facts">
+      ${fact('Temperatūra', `${t.min}°…${t.max}°`, `jaučiasi ${t.feelsMin}°…${t.feelsMax}°`)}
+      ${fact('Krituliai', `${t.rainMm} mm`, `tikimybė ${t.rainP}%`)}
+      ${fact('Vėjas', `iki ${t.wind} km/h`, `gūsiai ${t.gusts} km/h`)}
+      ${fact('Drėgmė', `${d.now.humidity}%`, 'dabar')}
+      ${fact('Saulė', `${t.sunrise} – ${t.sunset}`, 'teka ir leidžiasi')}
+      ${fact('UV indeksas', t.uv ?? '–', t.uvText)}
+    </div>
+    <div class="wx-tom"><span class="wx-e" aria-hidden="true">${m.emoji}</span><div style="flex:1"><span class="label">Rytoj</span><div class="serif" style="font-size:19px">${esc(m.text)}</div></div>
+      <div style="text-align:right"><b>${m.min}°…${m.max}°</b><div class="label">lietus ${m.rainP}%</div></div></div>
+    <p class="label" style="margin:4px 0 0;line-height:1.6">Šaltinis: Open-Meteo, nacionalinių orų tarnybų modeliai. Atnaujinama kas valandą. Tai prognozė, ne garantija.</p>
+  </div>`;
 }
 
 async function loadWeather() {
@@ -2121,10 +2430,10 @@ async function resumePending() {
     return;
   }
   rows.sort();
-  S.batch = { total: rows.length + prev.length, done: prev.length, ids: prev };
-  for (const id of rows) S.queue.push({ id, label: 'Laukia', p: 0, preview: '', single: false });
-  toast(`Tęsiamas įkėlimas: liko ${rows.length} ${plural(rows.length, 'rūbas', 'rūbai', 'rūbų')}`, 4000);
-  if (S.tab === 'spinta') rerender();
+  S.batch = { ...newBatch(), total: rows.length + prev.length, done: prev.length, start: prev.length, ids: prev };
+  for (const id of rows) S.queue.push({ id, label: 'Laukia', p: 0, single: false });
+  if (S.tab !== 'spinta') location.hash = '#spinta';
+  showUpload(); // tęsiam ten, kur sustojom – tas pats įkėlimo langas
   runQueue();
 }
 
