@@ -15,6 +15,7 @@ const S = {
   weather: null,
   currentId: null,
   renderTab: 'flat',
+  dislikeFor: null,
   styling: false,
   rendering: null,
   queue: [],
@@ -142,29 +143,30 @@ function orderedItems(itemIds) {
 
 function flatlayHTML(itemIds, mini = false, stamp = '', opts = {}) {
   const items = orderedItems(itemIds);
-  if (!items.length) return `<div class="flatlay ${mini ? 'mini' : ''}"><div class="fl-main" style="justify-content:center"><span class="label">Rūbai ištrinti</span></div></div>`;
+  if (!items.length) return `<div class="flatlay ${mini ? 'mini' : ''}"><div class="fl-body"><div class="fl-main" style="justify-content:center"><span class="label">Rūbai ištrinti</span></div></div></div>`;
   const by = {};
   for (const it of items) (by[slotOf(it)] = by[slotOf(it)] || []).push(it);
   const itemAttr = (it) => (mini || opts.static ? '' : opts.oid ? `data-act="ofit-item" data-o="${opts.oid}" data-id="${it.id}"` : `data-act="item" data-id="${it.id}"`);
   const img = (it, slot) => `<div class="fl-item ${slot} cat-${it.category}" ${itemAttr(it)}><img src="${blobURL(it.image)}" alt="${esc(it.name)}" loading="lazy"></div>`;
   const all = (arr, slot) => (arr || []).map((i) => img(i, slot)).join('');
 
-  // Kairė kolona: viršus (sluoksniais) → suknelė → apačia → pėdkelnės
-  const uppers = [...(by.top || []).map((i) => [i, 'top']), ...(by.outer || []).map((i) => [i, 'outer'])];
-  let main = '';
-  if (uppers.length > 1) main += `<div class="fl-layer">${uppers.map(([i, sl]) => img(i, sl)).join('')}</div>`;
-  else if (uppers.length) main += img(uppers[0][0], uppers[0][1]);
-  main += all(by.onepiece, 'onepiece') + all(by.bottom, 'bottom');
+  // Viršūs (marškinėliai, megztinis, švarkas) – atskira eilutė per visą plotį, kad niekas neišlįstų už kortelės.
+  // Kuo daugiau viršų, tuo siauresnis kiekvienas (plotį valdo klasė n1/n2/n3 CSS faile).
+  const uppers = [...(by.top || []).map((i) => [i, 'top']), ...(by.outer || []).map((i) => [i, 'outer'])].slice(0, 4);
+  const upperRow = uppers.length ? `<div class="fl-upper n${uppers.length}">${uppers.map(([i, sl]) => img(i, sl)).join('')}</div>` : '';
+  // Kairė kolona: suknelė → apačia → pėdkelnės
+  let main = all(by.onepiece, 'onepiece') + all(by.bottom, 'bottom');
   const tights = (by.legwear || []).filter((i) => i.category === 'tights');
   const socks = (by.legwear || []).filter((i) => i.category !== 'tights');
   main += all(tights, 'legwear');
   // jei nėra nei viršaus, nei apačios – kojinės lieka kairėje
-  const mainEmpty = !main;
+  const mainEmpty = !main && !uppers.length;
   // Dešinė kolona: galvos aksesuarai → kiti aksesuarai → kojinės → batai
   let side = all(by.head, 'head') + all(by.side, 'side') + (mainEmpty ? '' : all(socks, 'legwear')) + all(by.shoes, 'shoes');
   if (mainEmpty) main = all(socks, 'legwear');
   const zoom = opts.oid ? `data-act="zoom" data-o="${opts.oid}"` : '';
-  return `<div class="flatlay ${mini ? 'mini' : ''} ${opts.big ? 'big' : ''} ${side ? '' : 'solo'}" ${zoom}><div class="fl-main">${main}</div>${side ? `<div class="fl-side">${side}</div>` : ''}</div>`;
+  const body = main || side ? `<div class="fl-body"><div class="fl-main">${main}</div>${side ? `<div class="fl-side">${side}</div>` : ''}</div>` : '';
+  return `<div class="flatlay ${mini ? 'mini' : ''} ${opts.big ? 'big' : ''} ${side ? '' : 'solo'} ${upperRow ? 'has-upper' : ''}" ${zoom}>${upperRow}${body}</div>`;
 }
 
 function creditsHTML(o) {
@@ -221,11 +223,22 @@ function outfitCardHTML(o) {
         <button class="btn ${o.favorite ? 'primary' : ''}" data-act="fav" data-id="${o.id}">${o.favorite ? 'Mėgstamas ✓' : 'Į mėgstamus'}</button>
         <button class="btn ${worn ? 'dark' : ''}" data-act="wear" data-id="${o.id}" ${worn ? 'disabled' : ''}>${worn ? 'Vilki šiandien ✓' : 'Vilkėsiu šiandien'}</button>
         ${o.source === 'ai' ? `<button class="btn" data-act="restyle" data-id="${o.id}" ${S.styling ? 'disabled' : ''}>Kitas variantas</button>` : ''}
+        ${o.source === 'ai' ? `<button class="btn" data-act="dislike" data-id="${o.id}" ${S.styling ? 'disabled' : ''}>Nepatinka</button>` : ''}
         <button class="btn ${o.source === 'ai' ? '' : 'full'}" data-act="builder" data-id="${o.id}">Keisti rūbus</button>
       </div>
+      ${S.dislikeFor === o.id ? dislikeHTML(o) : ''}
       ${chatHTML(o)}
     </div>
   </div>`;
+}
+
+// „Nepatinka“: pasirenkama priežastis, stilistė ją įsimena ir siūlo kitą derinį
+const DISLIKE_REASONS = ['Neatitinka to, ko prašiau', 'Rūbai tarpusavyje nedera', 'Kartojasi tie patys rūbai', 'Nepatinka stilius', 'Netinka orams'];
+function dislikeHTML(o) {
+  return `<div class="dislike-box"><div class="label">Kas nepatiko? Stilistė įsimins ir pasiūlys kitą</div>
+    <div class="chips wrap">${DISLIKE_REASONS.map((r) => `<button class="chip" data-act="dislike-why" data-id="${o.id}" data-v="${esc(r)}">${esc(r)}</button>`).join('')}</div>
+    <div class="dislike-other"><input class="input" id="dislikeOther" placeholder="Arba parašyk savais žodžiais…" maxlength="160">
+      <button class="btn sm" data-act="dislike-why" data-id="${o.id}" data-v="">Siųsti</button></div></div>`;
 }
 
 const CHAT_IDEAS = [
@@ -446,7 +459,18 @@ const itemNames = (ids) => ids.map(itemById).filter(Boolean).map((i) => i.name |
 function styleCtx() {
   const favorites = S.outfits.filter((o) => o.favorite).sort((a, b) => b.createdAt - a.createdAt).slice(0, 10)
     .map((o) => itemNames(o.itemIds).join(' + ')).filter(Boolean);
-  return { about: S.profile.about, body: describeMe(S.me), learned: S.profile.learned, favorites, events: S.events.slice(-15).map((e) => e.text) };
+  const dislikes = S.outfits.filter((o) => o.dislike).sort((a, b) => b.dislike.at - a.dislike.at).slice(0, 12)
+    .map((o) => ({ derinys: itemNames(o.itemIds).join(' + '), priezastis: o.dislike.reason, noras: o.vibe || '' }));
+  return { about: S.profile.about, body: describeMe(S.me), learned: S.profile.learned, favorites, dislikes, events: S.events.slice(-15).map((e) => e.text) };
+}
+
+// Ką stilistė jau siūlė: kad nekartotų tų pačių kelnių ir viršų
+function outfitHistory() {
+  const ai = S.outfits.filter((o) => o.source === 'ai').sort((a, b) => b.createdAt - a.createdAt);
+  const usage = {};
+  for (const o of ai.slice(0, 40)) for (const id of o.itemIds) (usage[id] = usage[id] || { siulyta: 0 }).siulyta++;
+  const recent = ai.slice(0, 6).map((o) => itemNames(o.itemIds).join(' + '));
+  return { usage, recent };
 }
 
 async function logEvent(text) {
@@ -806,6 +830,10 @@ async function viewNustatymai() {
       <div class="field"><label>Ką stilistė išmoko iš pokalbių</label>
         ${S.profile.learned.length ? `<ul class="learned">${S.profile.learned.map((l, i) => `<li><span>${esc(l)}</span><button class="x" data-act="del-learned" data-i="${i}">Šalinti</button></li>`).join('')}</ul>`
           : `<span class="small muted">Kol kas nieko. Kai pokalbyje pasakysi, kas tau patinka ar ne, stilistė tai įsimins.</span>`}
+      </div>
+      <div class="field"><label>Fitai, kurie nepatiko</label>
+        ${S.outfits.some((o) => o.dislike) ? `<ul class="learned">${S.outfits.filter((o) => o.dislike).sort((a, b) => b.dislike.at - a.dislike.at).slice(0, 12).map((o) => `<li><span>${esc(o.dislike.reason)}<br><small>${esc(itemNames(o.itemIds).join(' + '))}</small></span><button class="x" data-act="del-dislike" data-id="${o.id}">Šalinti</button></li>`).join('')}</ul>`
+          : `<span class="small muted">Kol kas nėra. Paspaudus „Nepatinka“ po fitu, stilistė įsimena priežastį ir nebekartoja.</span>`}
       </div>
       <span class="small muted">Stilistė taip pat mato, kokius fitus pažymėjai mėgstamais, kuriuos atmetei, ką pati keitei ir ką vilkėjai.</span>
       ${S.profile.learned.length || S.events.length ? `<button class="btn sm ghost" style="align-self:flex-start;padding-left:0" data-act="reset-style">Pamiršti viską, ką išmoko</button>` : ''}
@@ -1601,7 +1629,7 @@ async function setCurrent(id) {
   await setSetting('currentOutfit', id);
 }
 
-async function doStyle(vibe, exclude = [], must = []) {
+async function doStyle(vibe, exclude = [], must = [], note = '') {
   if (!S.keyOk) return toast('Įjunk DI stilistę – įvesk raktą skiltyje „Daugiau“');
   if (S.items.length < 2) return toast('Įkelk bent kelis rūbus į spintą');
   S.styling = true;
@@ -1610,7 +1638,7 @@ async function doStyle(vibe, exclude = [], must = []) {
   try {
     const r = await styleOutfit({
       vibe, items: S.items, categories: S.categories,
-      weather: weatherForAI(S.weather), wearStats: wearStats(), exclude, style: styleCtx(), must,
+      weather: weatherForAI(S.weather), wearStats: wearStats(), exclude, style: styleCtx(), must, note, ...outfitHistory(),
     });
     const o = {
       id: uid(), title: r.title, explanation: r.explanation, tip: r.tip, vibe, gap: r.gap || '',
@@ -1665,6 +1693,28 @@ const actions = {
     const o = outfitById(el.dataset.id);
     logEvent(`Atmetė fitą ir paprašė kito: ${itemNames(o.itemIds).join(' + ')}`);
     doStyle(o.vibe || '', o.itemIds);
+  },
+  dislike(el) {
+    S.dislikeFor = S.dislikeFor === el.dataset.id ? null : el.dataset.id;
+    rerender();
+  },
+  async 'dislike-why'(el) {
+    const o = outfitById(el.dataset.id);
+    const reason = el.dataset.v || ($('#dislikeOther')?.value || '').trim();
+    if (!o || !reason) return toast('Pasirink ar parašyk priežastį');
+    o.dislike = { reason, at: Date.now() };
+    await saveOutfit(o);
+    S.dislikeFor = null;
+    logEvent(`Nepatiko fitas (${reason}): ${itemNames(o.itemIds).join(' + ')}`);
+    toast('Stilistė įsiminė. Kuriu kitą.', 2500);
+    doStyle(o.vibe || '', o.itemIds, [], reason);
+  },
+  async 'del-dislike'(el) {
+    const o = outfitById(el.dataset.id);
+    if (!o) return;
+    delete o.dislike;
+    await saveOutfit(o);
+    rerender();
   },
   rtab(el) {
     S.renderTab = el.dataset.v;

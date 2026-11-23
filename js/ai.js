@@ -184,11 +184,12 @@ function profileFor(style) {
   if (style.body) p.jos_figura_ir_spalvos = style.body;
   if (style.learned?.length) p.ka_ismokai_apie_jos_skoni = style.learned;
   if (style.favorites?.length) p.patike_fitai = style.favorites;
+  if (style.dislikes?.length) p.nepatike_fitai_ir_kodel = style.dislikes;
   if (style.events?.length) p.paskutiniai_jos_veiksmai = style.events;
   return Object.keys(p).length ? p : null;
 }
 
-function wardrobeFor(items, categories, wearStats) {
+function wardrobeFor(items, categories, wearStats, usage = {}) {
   const catById = Object.fromEntries(categories.map((c) => [c.id, c]));
   return items.map((it) => {
     const c = catById[it.category];
@@ -205,6 +206,7 @@ function wardrobeFor(items, categories, wearStats) {
       aprasas: it.description,
       vilketa_kartu: ws ? ws.count : 0,
       paskutini_karta: ws ? ws.last : null,
+      siulyta_kartu: usage[it.id]?.siulyta || 0,
     };
   });
 }
@@ -244,19 +246,64 @@ function checkOutfit(ids, items, categories, weather) {
   return problems;
 }
 
-export async function styleOutfit({ vibe, items, categories, weather, wearStats, exclude = [], style = null, must = [] }) {
-  const wardrobe = wardrobeFor(items, categories, wearStats);
+// ---- Kandidatų atranka ----
+// Kai vienos kategorijos rūbų daug (pvz. 16 kelnių), modelis visada griebia tuos pačius pirmuosius.
+// Todėl kiekvienai kategorijai parodome tik dalį: tuos, kurie rečiausiai siūlyti, su šiek tiek atsitiktinumo.
+const PER_CATEGORY = 6;
+function candidatePool(items, usage, must) {
+  const keep = new Set(must);
+  const byCat = {};
+  for (const it of items) (byCat[it.category] = byCat[it.category] || []).push(it);
+  for (const arr of Object.values(byCat)) {
+    if (arr.length <= PER_CATEGORY) { arr.forEach((i) => keep.add(i.id)); continue; }
+    arr
+      .map((i) => ({ i, score: (usage[i.id]?.siulyta || 0) + Math.random() * 2.5 }))
+      .sort((a, b) => a.score - b.score)
+      .slice(0, PER_CATEGORY)
+      .forEach((x) => keep.add(x.i.id));
+  }
+  const pool = items.filter((i) => keep.has(i.id));
+  // sumaišome, kad sąrašo tvarka neįtakotų pasirinkimo
+  for (let k = pool.length - 1; k > 0; k--) { const j = Math.floor(Math.random() * (k + 1)); [pool[k], pool[j]] = [pool[j], pool[k]]; }
+  return pool;
+}
+
+// ---- Antras žingsnis: stilistė PAŽIŪRI į parinktų rūbų nuotraukas ----
+async function reviewWithPhotos(messages, out, chosen, categories) {
+  const catById = Object.fromEntries(categories.map((c) => [c.id, c]));
+  const content = [{
+    type: 'text',
+    text:
+      'Štai tavo parinkti rūbai nuotraukose (ta pačia tvarka): ' +
+      chosen.map((it, n) => `${n + 1}) id ${it.id} – ${it.name || catById[it.category]?.label || 'rūbas'}`).join('; ') + '. ' +
+      'Dabar PAŽIŪRĖK Į NUOTRAUKAS ir patikrink: ar derinys atitinka jos norą ir orus; ar spalvos, faktūros ir stilius dera tarpusavyje; ' +
+      'ar tai atrodo kaip vienas gražus, apgalvotas derinys. Jei aprašas nesutampa su nuotrauka, tikėk NUOTRAUKA. ' +
+      'Jei kuris nors rūbas netinka – pakeisk jį kitu rūbu iš spintos sąrašo, kurį gavai (tik tikri id). Jei viskas gerai – palik. ' +
+      'Grąžink visą JSON iš naujo tuo pačiu formatu (laukus "explanation" ir "tip" pritaikyk galutiniam deriniui).',
+  }];
+  for (const it of chosen) content.push({ type: 'image_url', image_url: { url: await toDataURLForAI(it.image, 448), detail: 'low' } });
+  return chatJSON([...messages, { role: 'assistant', content: JSON.stringify(out) }, { role: 'user', content }], 'chat');
+}
+
+export async function styleOutfit({ vibe, items, categories, weather, wearStats, exclude = [], style = null, must = [], usage = {}, recent = [], note = '' }) {
+  const pool = candidatePool(items, usage, must);
+  const wardrobe = wardrobeFor(pool, categories, wearStats, usage);
   const today = new Date().toISOString().slice(0, 10);
   const messages = [
     {
       role: 'system',
       content:
         STYLIST +
-        'DARBO EIGA: 1) perskaityk jos norą ir orus; 2) pasirink pagrindą – suknelę ARBA VIENĄ viršų + apačią (antras viršus galimas tik megztinis ant plonesnio viršaus); ' +
+        'SVARBIAUSIA – JOS NORAS ("noras"). Pirmiausia nuspręsk, kokio formalumo ir stiliaus fito jai reikia ' +
+        '(pvz. „kava su drauge“ = patogu ir tvarkinga, ne vakarinė suknelė; „darbas“ = tvarkingai; „sportas“ = tik sportiniai rūbai; „vakarėlis“ = išskirtiniau). ' +
+        'Rūbas, kuris nedera prie noro, netinka, net jei gražus. ' +
+        'ĮVAIROVĖ: kiekvienas rūbas turi "siulyta_kartu" – kiek kartų jį jau siūlei. Rinkis tuos, kurie siūlyti rečiau, ir NEKARTOK rūbų iš "neseniai_siulyti_deriniai" (ypač tų pačių kelnių ar viršų), nebent tai tikrai vienintelis tinkamas pasirinkimas. ' +
+        'DARBO EIGA: 1) perskaityk jos norą ir orus ir užrašyk "analize"; 2) pasirink pagrindą – suknelę ARBA VIENĄ viršų + apačią (antras viršus galimas tik megztinis ant plonesnio viršaus); ' +
         '3) pridėk sluoksnius pagal orus; 4) batus; 5) pėdkelnes/kojines tik jei tinka prie apačios ir orų; 6) 0–2 aksesuarus. ' +
         'Kiekvienas rūbas turi derėti spalva, stiliumi ir proga su kitais – jokių atsitiktinių derinių (pvz. sportinės kelnės su vakarine palaidine). ' +
         'Nedėk kelių kelnių, kelių sijonų, kelių porų batų ar suknelės kartu su kelnėmis. ' +
-        'Atsakyk TIK JSON: {"planas": "1–2 sakiniai sau: kokia idėja, pagrindas ir spalvos", "title": "trumpas žaismingas pavadinimas", "itemIds": [...], ' +
+        'Jei yra "ankstesnis_nepatiko_nes" – ištaisyk būtent tai ir neduok panašaus derinio. ' +
+        'Atsakyk TIK JSON: {"analize": "2 sakiniai: ko šiam norui ir orams reikia", "planas": "1–2 sakiniai sau: kokia idėja, pagrindas ir spalvos", "title": "trumpas žaismingas pavadinimas", "itemIds": [...], ' +
         '"explanation": "2–3 sakiniai kodėl šis derinys", "tip": "1 stiliaus patarimas (pvz. kaip susegti, kokį makiažą)", ' +
         '"gap": "" arba vienu trumpu sakiniu, ko spintoje tikrai trūksta šiems orams ar progai (be priekaištų)}. ' +
         'Jei spintoje trūksta būtinų rūbų, vis tiek pasiūlyk geriausią įmanomą. Rūbus iš "butinai_itraukti" privalai įtraukti.',
@@ -269,20 +316,30 @@ export async function styleOutfit({ vibe, items, categories, weather, wearStats,
         data: today,
         orai: weather || 'nežinomi',
         nesiulyti_tiksliai_tokio_pat_derinio_kaip: exclude,
+        neseniai_siulyti_deriniai: recent,
+        ankstesnis_nepatiko_nes: note || undefined,
         butinai_itraukti: must,
         spinta: wardrobe,
       }),
     },
   ];
-  const valid = new Set(items.map((i) => i.id));
+  const valid = new Set(pool.map((i) => i.id));
   const clean = (o) => {
     o.itemIds = [...new Set((o.itemIds || []).filter((id) => valid.has(id)))];
     for (const id of must) if (valid.has(id) && !o.itemIds.includes(id)) o.itemIds.push(id);
     return o;
   };
   let out = clean(await chatJSON(messages, 'chat'));
+  // antras žingsnis: stilistė pažiūri į nuotraukas. Jei nepavyksta – paliekam pirmą variantą.
+  try {
+    const chosen = out.itemIds.map((id) => pool.find((i) => i.id === id)).filter((i) => i && i.image);
+    if (chosen.length) {
+      const seen = clean(await reviewWithPhotos(messages, out, chosen, categories));
+      if (seen.itemIds.length) out = seen;
+    }
+  } catch (e) { console.warn('nuotraukų peržiūra', e); }
   // jei derinys nelogiškas – vieną kartą paprašom pataisyti
-  const problems = checkOutfit(out.itemIds, items, categories, weather);
+  const problems = checkOutfit(out.itemIds, pool, categories, weather);
   if (problems.length) {
     try {
       const fixed = clean(await chatJSON([
@@ -290,10 +347,10 @@ export async function styleOutfit({ vibe, items, categories, weather, wearStats,
         { role: 'assistant', content: JSON.stringify(out) },
         { role: 'user', content: 'Šis derinys turi klaidų: ' + problems.join(' ') + ' Pataisyk ir grąžink visą JSON iš naujo tuo pačiu formatu.' },
       ], 'chat'));
-      if (fixed.itemIds.length && checkOutfit(fixed.itemIds, items, categories, weather).length <= problems.length) out = fixed;
+      if (fixed.itemIds.length && checkOutfit(fixed.itemIds, pool, categories, weather).length <= problems.length) out = fixed;
     } catch (e) { console.warn('fix', e); }
   }
-  out.itemIds = sanitizeOutfit(out.itemIds, items, categories, must);
+  out.itemIds = sanitizeOutfit(out.itemIds, pool, categories, must);
   if (!out.itemIds.length) throw new Error('Stilistei nepavyko parinkti rūbų. Pabandyk kitaip aprašyti norą.');
   return out;
 }

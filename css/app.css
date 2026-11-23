@@ -177,26 +177,33 @@ textarea.input { resize: none; min-height: 76px; line-height: 1.35; font-size: 1
 
 /* ---- Koliažas (Pinterest stilius): kairėje rūbai, dešinėje aksesuarai ir batai ---- */
 .flatlay {
-  position: relative; display: flex; gap: 3%; align-items: stretch;
+  position: relative; display: flex; flex-direction: column; align-items: stretch;
   padding: 20px 14px; margin: 14px 18px 0; min-height: 240px; border-radius: 2px;
   background: #F8F6F2;
 }
+.fl-body { display: flex; gap: 3%; align-items: stretch; flex: 1; }
+.flatlay.has-upper .fl-body { margin-top: -5%; }
 .flatlay.solo .fl-main { flex-basis: 80%; margin: 0 auto; }
 .fl-main { flex: 0 0 63%; display: flex; flex-direction: column; align-items: center; justify-content: center; }
 .fl-side { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: space-around; align-items: center; gap: 12px; padding: 4px 0; }
 .fl-item { position: relative; display: flex; justify-content: center; align-items: center; }
 .fl-item img { display: block; max-width: 100%; object-fit: contain; filter: drop-shadow(0 8px 10px rgba(50, 30, 20, .15)); }
-.fl-main > .fl-item img, .fl-layer .fl-item img { width: 100%; height: auto; }
+.fl-main > .fl-item img { width: 100%; height: auto; }
 .fl-main > .fl-item { width: 86%; z-index: 2; }
 .fl-main > .fl-item.head { width: 38%; margin-bottom: 3%; }
-.fl-main > .fl-item.top, .fl-main > .fl-item.outer { width: 92%; z-index: 3; }
 .fl-main > .fl-item.onepiece { width: 86%; }
-.fl-main > .fl-item.bottom { width: 80%; margin-top: -7%; }
+.fl-main > .fl-item.bottom { width: 72%; }
 .fl-main > .fl-item.cat-tights { width: 50%; z-index: 1; margin-top: -24%; }
 .fl-main > .fl-item.legwear:not(.cat-tights) { width: 46%; margin-top: 2%; }
-.fl-layer { position: relative; z-index: 3; display: flex; align-items: flex-start; width: 100%; }
-.fl-layer .fl-item { flex: 0 0 58%; }
-.fl-layer .fl-item + .fl-item { margin-left: -16%; margin-top: 5%; }
+/* Viršų eilutė: visi telpa į plotį, vienas šiek tiek užeina ant kito */
+.fl-upper { position: relative; z-index: 3; display: flex; justify-content: center; align-items: flex-start; width: 100%; }
+.fl-upper .fl-item { flex: 0 1 auto; min-width: 0; }
+.fl-upper .fl-item img { width: 100%; height: auto; max-height: 36dvh; object-fit: contain; }
+.fl-upper .fl-item + .fl-item { margin-left: -7%; }
+.fl-upper.n1 .fl-item { width: 62%; }
+.fl-upper.n2 .fl-item { width: 52%; }
+.fl-upper.n3 .fl-item { width: 40%; }
+.fl-upper.n4 .fl-item { width: 31%; }
 .fl-side .fl-item { width: 100%; }
 .fl-side .fl-item img { max-width: 90%; max-height: 110px; }
 .fl-side .fl-item.side img { max-height: 135px; }
@@ -695,3 +702,9 @@ img.rb-av { height: 200px; width: auto; border-radius: 2px; }
 .rv-row.out .rv-f .serif { font-size: 15px; text-decoration: line-through; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rv-row.out .btn.sm { flex: none; min-height: 44px; }
 .bulkbar .btn.sm { min-height: 40px; }
+
+/* „Nepatinka“ priežastys */
+.dislike-box { display: flex; flex-direction: column; gap: 10px; padding: 14px 0 4px; border-top: 1px solid var(--line); margin-top: 10px; }
+.dislike-other { display: flex; gap: 8px; align-items: center; }
+.dislike-other .input { flex: 1; min-width: 0; }
+.learned li small { font-family: var(--mono); font-style: normal; font-size: 10.5px; opacity: .6; }
