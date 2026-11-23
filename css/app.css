@@ -708,3 +708,8 @@ img.rb-av { height: 200px; width: auto; border-radius: 2px; }
 .dislike-other { display: flex; gap: 8px; align-items: center; }
 .dislike-other .input { flex: 1; min-width: 0; }
 .learned li small { font-family: var(--mono); font-style: normal; font-size: 10.5px; opacity: .6; }
+
+/* Aprašų patikra */
+.desc-banner { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 16px; }
+.desc-banner .btn { flex: none; }
+.dc-hero img { max-height: 28dvh; object-fit: contain; }

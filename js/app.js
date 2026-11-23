@@ -16,6 +16,7 @@ const S = {
   currentId: null,
   renderTab: 'flat',
   dislikeFor: null,
+  dc: null,
   styling: false,
   rendering: null,
   queue: [],
@@ -654,6 +655,7 @@ function viewSpinta() {
       <div><div class="h-title">Mano<br><em>spinta</em></div><div class="label h-sub">${S.items.length} ${plural(S.items.length, 'rūbas', 'rūbai', 'rūbų')}</div></div>
       ${S.items.length ? `<button class="btn sm ${S.selecting ? 'dark' : ''}" data-act="select-mode">${S.selecting ? 'Baigti' : 'Žymėti'}</button>` : ''}
     </div>
+    ${descBannerHTML()}
     <nav class="filters">
       ${groups.map((g) => `<button class="filt ${S.fGroup === g.id ? 'on' : ''}" data-act="fgroup" data-v="${g.id}">${g.label}<sup>${groupCount(g)}</sup></button>`).join('')}
     </nav>
@@ -1394,6 +1396,81 @@ function categorySelect(selected) {
 
 const WARMTH = ['Plonas', 'Lengvas', 'Vidutinis', 'Šiltas', 'Labai'];
 
+// ================= Aprašų patikra =================
+// Žodžiai pavadinime ir kategorijos, kurios jiems tinka. Jei pavadinimas sako „sijonas“, o kategorija „Kelnės“ – įtartina.
+const NAME_HINTS = [
+  [/kelnės|kelnes|džinsai|dzinsai|tamprės|tampres|legging/, ['pants', 'sport_bottom']],
+  [/sijon/, ['skirts']],
+  [/suknel|kombinezon/, ['dresses']],
+  [/šort|sort/, ['shorts', 'sport_bottom']],
+  [/megzt|džemper|dzemper|kardigan|hudi/, ['sweaters']],
+  [/švark|svark|bleizer/, ['blazers']],
+  [/striuk/, ['jackets']],
+  [/palt/, ['coats']],
+  [/palaidin|marškin(?!ėl)/, ['blouses']],
+  [/marškinėl|maikut/, ['tshirts', 'sport_top']],
+  [/pėdkeln|pedkeln/, ['tights']],
+  [/kojin/, ['socks']],
+  [/batai|bateliai|sportbač|basut|sandal/, ['shoes']],
+];
+
+// Kas rūbo informacijoje atrodo blogai (tuščia arba prieštarauja). Tuščias sąrašas = viskas atrodo tvarkoje.
+function itemIssues(it) {
+  const out = [];
+  const name = (it.name || '').trim();
+  const cat = catById(it.category);
+  if (!cat) out.push('Nepasirinkta kategorija');
+  if (!name || (cat && name.toLowerCase() === cat.label.toLowerCase())) out.push('Nėra pavadinimo');
+  if ((it.description || '').trim().length < 20) out.push('Trūksta aprašo');
+  if (!(it.colors || []).length) out.push('Nenurodytos spalvos');
+  if (!(it.seasons || []).length) out.push('Nenurodyti sezonai');
+  const low = name.toLowerCase();
+  const hits = NAME_HINTS.filter(([re]) => re.test(low));
+  if (hits.length && cat && !hits.some(([, cats]) => cats.includes(it.category))) out.push('Pavadinimas nesutampa su kategorija');
+  return out;
+}
+const needsCheck = (it) => !it.checked && itemIssues(it).length > 0;
+
+function descBannerHTML() {
+  const n = S.items.filter(needsCheck).length;
+  if (!n) return '';
+  return `<div class="card panel-sand desc-banner"><div><div class="label">Verta patikrinti</div>
+    <div class="serif" style="font-size:19px;line-height:1.25">${n} ${plural(n, 'rūbo', 'rūbų', 'rūbų')} informacija atrodo neišsami arba klaidinga</div>
+    <div class="small muted">Stilistė pagal tai renkasi fitus, todėl geri aprašai = geresni fitai.</div></div>
+    <button class="btn sm primary" data-act="dc-open">Peržiūrėti</button></div>`;
+}
+
+function openDescCheck() {
+  S.dc = { ids: S.items.filter(needsCheck).sort((a, b) => b.createdAt - a.createdAt).map((i) => i.id), i: 0 };
+  renderDescCheck();
+}
+
+function renderDescCheck() {
+  const dc = S.dc;
+  const it = dc && itemById(dc.ids[dc.i]);
+  if (!it) {
+    closeSheet();
+    S.dc = null;
+    toast('Peržiūra baigta');
+    return rerender();
+  }
+  const issues = itemIssues(it);
+  openSheet(`
+    ${sheetTop('Aprašų patikra', 'Uždaryti')}
+    <div class="stack" id="dcForm" data-id="${it.id}">
+      <div class="label">${dc.i + 1} iš ${dc.ids.length}</div>
+      ${it.image ? `<div class="item-hero dc-hero"><img src="${blobURL(it.image)}" alt="${esc(it.name)}"></div>` : ''}
+      ${issues.length ? `<div class="chips wrap">${issues.map((x) => `<span class="chip on">${esc(x)}</span>`).join('')}</div>` : '<div class="small muted">Dabar viskas užpildyta.</div>'}
+      <div class="field"><label>Pavadinimas</label><input class="input" name="name" value="${esc(it.name)}" placeholder="Balta lininė palaidinė"></div>
+      <div class="field"><label>Kategorija</label><select class="input" name="category">${categorySelect(it.category)}</select></div>
+      <div class="field"><label>Spalvos</label><input class="input" name="colors" value="${esc((it.colors || []).join(', '))}" placeholder="balta, smėlio"></div>
+      <div class="field"><label>Aprašas (stilistė jį skaito)</label><textarea class="input" name="description" rows="3" placeholder="Pvz. platūs lengvi lininiai marškiniai, ilgomis rankovėmis, tinka vasarai">${esc(it.description || '')}</textarea></div>
+      <button class="btn primary block" data-act="dc-save">Išsaugoti ir toliau</button>
+      <div class="row"><button class="btn sm" style="flex:1" data-act="dc-ok">Viskas gerai</button><button class="btn sm" style="flex:1" data-act="dc-skip">Praleisti</button></div>
+    </div>`);
+  $('#sheet').scrollTop = 0;
+}
+
 function openItem(id, fresh = false) {
   const it = itemById(id);
   if (!it) return;
@@ -1420,6 +1497,7 @@ function openItem(id, fresh = false) {
       <div class="field"><label>Pavadinimas</label><input class="input" name="name" value="${esc(it.name)}" placeholder="Balta lininė palaidinė"></div>
       <div class="field"><label>Kategorija</label><select class="input" name="category">${categorySelect(it.category)}</select></div>
       <div class="field"><label>Spalvos</label><input class="input" name="colors" value="${esc((it.colors || []).join(', '))}" placeholder="balta, smėlio"></div>
+      <div class="field"><label>Aprašas (stilistė jį skaito)</label><textarea class="input" name="description" rows="3" placeholder="Pvz. platūs lengvi lininiai marškiniai, ilgomis rankovėmis">${esc(it.description || '')}</textarea></div>
       <div class="field"><label>Sezonai</label><div class="chips wrap" data-group="seasons">${SEASONS.map((s) => `<button class="chip soft ${(it.seasons || []).includes(s) ? 'on' : ''}" data-act="toggle" data-v="${s}">${s}</button>`).join('')}</div></div>
       <div class="field"><label>Progos</label><div class="chips wrap" data-group="occasions">${OCCASIONS.map((s) => `<button class="chip soft ${(it.occasions || []).includes(s) ? 'on' : ''}" data-act="toggle" data-v="${s}">${s}</button>`).join('')}</div></div>
       <div class="field"><label>Kaina, € · nebūtina</label><input class="input" name="price" inputmode="decimal" value="${it.price ?? ''}" placeholder="pvz. 39"></div>
@@ -1816,6 +1894,8 @@ const actions = {
     it.name = f.querySelector('[name=name]').value.trim();
     it.category = f.querySelector('[name=category]').value;
     it.colors = f.querySelector('[name=colors]').value.split(',').map((s) => s.trim()).filter(Boolean);
+    it.description = f.querySelector('[name=description]').value.trim();
+    it.checked = true; // vartotojas pats peržiūrėjo ir išsaugojo
     it.seasons = [...f.querySelectorAll('[data-group=seasons] .on')].map((b) => b.dataset.v);
     it.occasions = [...f.querySelectorAll('[data-group=occasions] .on')].map((b) => b.dataset.v);
     const w = f.querySelector('.warmth .on');
@@ -1827,6 +1907,27 @@ const actions = {
     toast('Išsaugota');
     rerender();
   },
+  'dc-open'() { openDescCheck(); },
+  async 'dc-save'() {
+    const f = $('#dcForm');
+    const it = itemById(f.dataset.id);
+    if (!it) return;
+    it.name = f.querySelector('[name=name]').value.trim();
+    it.category = f.querySelector('[name=category]').value;
+    it.colors = f.querySelector('[name=colors]').value.split(',').map((x) => x.trim()).filter(Boolean);
+    it.description = f.querySelector('[name=description]').value.trim();
+    it.checked = true;
+    await db.put('items', it);
+    S.dc.i++;
+    renderDescCheck();
+  },
+  async 'dc-ok'() {
+    const it = itemById($('#dcForm').dataset.id);
+    if (it) { it.checked = true; await db.put('items', it); }
+    S.dc.i++;
+    renderDescCheck();
+  },
+  'dc-skip'() { S.dc.i++; renderDescCheck(); },
   async 'img-op'(el) {
     const it = itemById($('#itemForm').dataset.id);
     if (!it || el.disabled) return;
